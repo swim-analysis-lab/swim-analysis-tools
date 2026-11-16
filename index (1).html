@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스트림라인 자세 분석</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+/* 레이아웃: 한 열(폰) → 측정 화면만 넓은 화면에서 사진 | 수치 두 열. 수치는 고정폭 숫자, 상태는 알약 표시 */
+:root{
+  --bg:#f2f5f6; --surface:#ffffff; --sunken:#e8eef0; --ink:#0f232b; --muted:#566a73; --line:#d3dde1;
+  --accent:#0a6c80; --accent-ink:#ffffff; --accent-soft:#dff0f3;
+  --good:#237a36; --good-soft:#e1f3e4; --warn:#a86200; --warn-soft:#fbeed6; --bad:#b92727; --bad-soft:#fbe3e3;
+  --font-display:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --font-body:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --font-num:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0b1519; --surface:#122228; --sunken:#0e1b20; --ink:#e4edef; --muted:#8fa4ac; --line:#243840;
+    --accent:#45c4d8; --accent-ink:#06262d; --accent-soft:#143640;
+    --good:#6fd683; --good-soft:#143220; --warn:#f2b866; --warn-soft:#3a2a10; --bad:#ff8c8c; --bad-soft:#3d1818;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0b1519; --surface:#122228; --sunken:#0e1b20; --ink:#e4edef; --muted:#8fa4ac; --line:#243840;
+  --accent:#45c4d8; --accent-ink:#06262d; --accent-soft:#143640;
+  --good:#6fd683; --good-soft:#143220; --warn:#f2b866; --warn-soft:#3a2a10; --bad:#ff8c8c; --bad-soft:#3d1818;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.55;-webkit-text-size-adjust:100%}
+h1,h2,h3{font-family:var(--font-display);text-wrap:balance;margin:0;line-height:1.25}
+h1{font-size:19px;font-weight:700}
+h2{font-size:16px;font-weight:700}
+h3{font-size:14.5px;font-weight:600}
+p{margin:0}
+a{color:var(--accent)}
+button,select,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 16px 56px}
+header.top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:14px 0 10px}
+header.top .where{font-size:12.5px;color:var(--muted);margin-left:auto;display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.dot.cloud{background:var(--good)} .dot.local{background:var(--warn)}
+nav.tabs{display:flex;gap:4px;background:var(--sunken);padding:4px;border-radius:var(--r);position:sticky;top:0;z-index:5;border:1px solid var(--line)}
+nav.tabs a{flex:1;text-align:center;padding:8px 4px;border-radius:7px;text-decoration:none;color:var(--muted);font-weight:600;font-size:14px;white-space:nowrap}
+nav.tabs a[aria-current="page"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+main{display:flex;flex-direction:column;gap:14px;margin-top:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.muted{color:var(--muted)} .small{font-size:12.5px} .num{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:9px 14px;font-weight:600;cursor:pointer;min-height:40px}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.danger{color:var(--bad);border-color:var(--bad)}
+.btn.sm{padding:5px 10px;min-height:32px;font-size:13px}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:130px}
+.field label{font-size:12.5px;color:var(--muted);font-weight:600}
+input[type=date],input[type=text],select,textarea{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 10px;min-height:40px;width:100%}
+.banner{border-radius:8px;padding:9px 12px;font-size:13.5px;background:var(--accent-soft);border:1px solid var(--line)}
+.banner.warn{background:var(--warn-soft)} .banner.bad{background:var(--bad-soft)}
+.pill{display:inline-flex;align-items:center;border-radius:99px;padding:1px 9px;font-size:12px;font-weight:700;white-space:nowrap;border:1px solid transparent}
+.pill.g{background:var(--good-soft);color:var(--good)} .pill.w{background:var(--warn-soft);color:var(--warn)}
+.pill.b{background:var(--bad-soft);color:var(--bad)} .pill.n{background:var(--sunken);color:var(--muted)}
+
+/* 측정 화면 */
+.measure{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:900px){.measure{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);align-items:start}}
+.stagebox{display:flex;justify-content:center;background:var(--sunken);border-radius:8px;padding:6px}
+.stage{position:relative;display:inline-block;line-height:0;touch-action:none;user-select:none;-webkit-user-select:none;cursor:crosshair}
+.stage img{display:block;max-width:100%;max-height:68vh;border-radius:5px;pointer-events:none}
+.stage svg,.shot svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+#loupe{position:absolute;width:128px;height:128px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,.5);display:none;pointer-events:none;background:#000}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:4px 10px;font-size:13px;cursor:pointer;display:inline-flex;gap:5px;align-items:center;min-height:32px}
+.chip.done{background:var(--good-soft);border-color:transparent}
+.chip.cur{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft);font-weight:700}
+.chip .mk{font-size:11px;color:var(--muted)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:7px 12px;cursor:pointer;min-height:36px;font-weight:600}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.hero{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+.hero .big{font-family:var(--font-num);font-size:34px;font-weight:600;line-height:1}
+table.mt{width:100%;border-collapse:collapse}
+table.mt td,table.mt th{padding:8px 4px;border-top:1px solid var(--line);vertical-align:top;text-align:left}
+table.mt th{font-size:12px;color:var(--muted);font-weight:600;border-top:0}
+table.mt td.v{text-align:right;white-space:nowrap;font-family:var(--font-num);font-variant-numeric:tabular-nums;font-weight:600}
+table.mt td.s{text-align:right;white-space:nowrap}
+.tscroll{overflow-x:auto}
+/* 기록 화면 */
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.shot{position:relative;line-height:0;background:var(--sunken);border-radius:6px;overflow:hidden}
+.shot img{width:100%;display:block}
+.shot .ph{display:block;width:100%}
+.shot .tag{position:absolute;left:6px;top:6px;background:rgba(0,0,0,.62);color:#fff;font-size:12px;line-height:1.3;padding:2px 7px;border-radius:5px}
+.recs{display:flex;flex-direction:column}
+.rec{display:grid;grid-template-columns:56px minmax(0,1fr);gap:10px;padding:10px 0;border-top:1px solid var(--line);align-items:start}
+.rec:first-child{border-top:0}
+.rec .shot{width:56px}
+svg.chart{width:100%;max-width:680px;height:auto;display:block}
+svg text{font-family:var(--font-body)}
+/* 추천 화면 */
+.finding{border-left:4px solid var(--line);padding:2px 0 2px 12px;display:flex;flex-direction:column;gap:6px}
+.finding.l1{border-color:var(--warn)} .finding.l2{border-color:var(--bad)} .finding.l0{border-color:var(--good)}
+.ex{border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:7px}
+.ex .no{font-family:var(--font-num);color:var(--accent);font-weight:600}
+.ex ol{margin:0;padding-left:20px}
+.why{background:var(--accent-soft);border-radius:7px;padding:8px 10px;font-size:13.5px}
+details{border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+details summary{cursor:pointer;font-weight:600}
+details>*:not(summary){margin-top:8px}
+.prose{max-width:66ch;display:flex;flex-direction:column;gap:8px}
+.prose ul,.prose ol{margin:0;padding-left:20px}
+.toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:99px;font-size:13.5px;z-index:20;max-width:calc(100% - 32px)}
+@media (prefers-reduced-motion:no-preference){.toast{transition:opacity .2s}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>스트림라인 자세 분석</h1>
+    <div class="where" id="where"><span class="dot"></span><span>저장 위치 확인 중</span></div>
+  </header>
+  <nav class="tabs" aria-label="화면">
+    <a href="#measure" data-v="measure">측정</a>
+    <a href="#history" data-v="history">기록·비교</a>
+    <a href="#plan" data-v="plan">운동 추천</a>
+    <a href="#guide" data-v="guide">방법</a>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="toast" class="toast" style="display:none" role="status"></div>
+
+<script id="core">
+/* ===== 계산부: 화면과 무관한 순수 함수 ===== */
+const PTS=[
+ {k:'finger',n:'손끝',hint:'가장 긴 손가락 끝'},
+ {k:'wrist',n:'손목',hint:'손목 주름 가운데'},
+ {k:'elbow',n:'팔꿈치',hint:'팔꿈치 바깥쪽 가운데'},
+ {k:'shoulder',n:'어깨',hint:'어깨 끝 뼈 바로 아래, 팔뼈 머리 가운데'},
+ {k:'ear',n:'귀',hint:'귓구멍. 팔에 가려지면 짐작한 위치'},
+ {k:'hip',n:'골반',hint:'허벅지 옆에서 가장 튀어나온 뼈(대전자)'},
+ {k:'knee',n:'무릎',hint:'무릎 옆면 가운데'},
+ {k:'ankle',n:'복사뼈',hint:'바깥 복사뼈'},
+ {k:'back',n:'등 정점',hint:'등에서 가장 뒤로 나온 곳',opt:true},
+ {k:'lumbar',n:'허리 오목',hint:'허리에서 가장 들어간 곳',opt:true},
+ {k:'butt',n:'엉덩이 정점',hint:'엉덩이에서 가장 뒤로 나온 곳',opt:true},
+ {k:'rib',n:'갈비 앞',hint:'아래쪽 갈비뼈가 앞으로 가장 나온 곳',opt:true}
+];
+const REQ=PTS.filter(p=>!p.opt).map(p=>p.k);
+const PNAME=Object.fromEntries(PTS.map(p=>[p.k,p.n]));
+const FRONT={right:[1,0],left:[-1,0],up:[0,-1],down:[0,1]};
+/* th: [양호 상한, 주의 상한] — 잠정 기준. noise: 이보다 작은 변화는 마킹 오차로 봄 */
+const METRICS=[
+ {k:'line',n:'전체 일직선 편차',u:'%',th:[1.5,3],noise:0.4,d:'손끝–복사뼈를 이은 직선에서 손목·팔꿈치·어깨·골반·무릎이 벗어난 정도. 0이면 완전한 일자'},
+ {k:'shoulder',n:'어깨 굴곡 부족',u:'°',th:[5,12],noise:3,d:'몸통선을 머리 위로 연장한 선보다 위팔이 앞으로 기운 각. 0 이하면 팔이 몸통선까지 올라온 것'},
+ {k:'elbow',n:'팔꿈치 굽힘',u:'°',th:[5,12],noise:3,d:'완전히 편 상태(0)에서 굽은 각'},
+ {k:'wrist',n:'손목 꺾임',u:'°',th:[8,15],noise:4,d:'아래팔 연장선에서 손이 앞(+)·뒤(−)로 꺾인 각'},
+ {k:'head',n:'머리 전방 편차',u:'%',th:[6,12],noise:2,d:'귀가 몸통선보다 앞(+)·뒤(−)에 있는 거리. 몸통 길이 대비'},
+ {k:'hip',n:'골반 각',u:'°',th:[4,9],noise:3,d:'허벅지선 대비 몸통이 앞으로 숙여짐(+), 뒤로 젖혀짐(−)'},
+ {k:'knee',n:'무릎 굽힘',u:'°',th:[4,9],noise:3,d:'굽힘(+), 뒤로 밀림(−)'},
+ {k:'arch',n:'허리 아치 깊이',u:'%',th:[5,9],noise:1.5,opt:true,d:'등 정점–엉덩이 정점을 이은 선에서 허리 오목점까지의 깊이. 그 선 길이 대비'},
+ {k:'rib',n:'갈비 돌출',u:'%',th:null,noise:2,opt:true,d:'몸통선에서 갈비 앞점까지 거리. 체형 영향이 커서 본인 기록끼리만 비교'}
+];
+const MDEF=Object.fromEntries(METRICS.map(m=>[m.k,m]));
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1]],dot=(a,b)=>a[0]*b[0]+a[1]*b[1],len=a=>Math.hypot(a[0],a[1]);
+const norm=a=>{const l=len(a)||1;return [a[0]/l,a[1]/l]},deg=r=>r*180/Math.PI;
+function frontNormal(u,F){let n=[u[1],-u[0]];if(dot(n,F)<0)n=[-n[0],-n[1]];return n}
+function angleAt(a,b,c){const v1=norm(sub(a,b)),v2=norm(sub(c,b));return deg(Math.acos(Math.max(-1,Math.min(1,dot(v1,v2)))))}
+function computeMetrics(P,W,H,front){
+  const F=FRONT[front];const g=k=>P&&P[k]?[P[k][0]*W,P[k][1]*H]:null;
+  const missing=REQ.filter(k=>!(P&&P[k]));const m={missing,ok:!missing.length&&!!F,noFront:!F};
+  if(!m.ok)return m;
+  const fi=g('finger'),wr=g('wrist'),el=g('elbow'),sh=g('shoulder'),ear=g('ear'),hip=g('hip'),kn=g('knee'),an=g('ankle');
+  const u=norm(sub(sh,hip)),n=frontNormal(u,F),trunk=len(sub(sh,hip));
+  m.frontBad=Math.abs(dot(u,F))>0.75;
+  const arm=sub(el,sh);m.shoulder=deg(Math.atan2(dot(arm,n),dot(arm,u)));
+  m.elbow=180-angleAt(sh,el,wr);
+  const fu=norm(sub(wr,el)),fn=frontNormal(fu,F),hand=sub(fi,wr);
+  m.wrist=deg(Math.atan2(dot(hand,fn),dot(hand,fu)));
+  m.head=dot(sub(ear,sh),n)/trunk*100;
+  const v=norm(sub(hip,kn)),vn=frontNormal(v,F);m.hip=deg(Math.atan2(dot(u,vn),dot(u,v)));
+  const s=norm(sub(kn,an)),sn=frontNormal(s,F);m.knee=-deg(Math.atan2(dot(v,sn),dot(v,s)));
+  const L=sub(fi,an),Ll=len(L),lu=norm(L),ln=frontNormal(lu,F);
+  m.devs={};let ss=0,mx=null;
+  ['wrist','elbow','shoulder','hip','knee'].forEach(k=>{const d=dot(sub(g(k),an),ln)/Ll*100;m.devs[k]=d;ss+=d*d;if(mx===null||Math.abs(d)>Math.abs(m.devs[mx]))mx=k});
+  m.line=Math.sqrt(ss/5);m.lineMax=mx;
+  const a=deg(Math.atan2(Math.abs(lu[0]),Math.abs(lu[1])));m.lying=a>45;m.tilt=Math.min(a,90-a);
+  const bk=g('back'),lb=g('lumbar'),bt=g('butt'),rb=g('rib');
+  m.arch=null;m.rib=null;
+  if(bk&&lb&&bt){const bu=norm(sub(bk,bt)),bn=frontNormal(bu,F);m.arch=dot(sub(lb,bt),bn)/len(sub(bk,bt))*100}
+  if(rb)m.rib=dot(sub(rb,hip),n)/trunk*100;
+  return m;
+}
+function bad(k,v){if(v==null)return null;return (k==='shoulder'||k==='line'||k==='arch'||k==='elbow'||k==='rib')?Math.max(v,0):Math.abs(v)}
+function rate(k,v){const th=MDEF[k].th;if(v==null||!th)return null;const b=bad(k,v);return b<=th[0]?0:b<=th[1]?1:2}
+function rateAll(m){const r={};METRICS.forEach(d=>r[d.k]=rate(d.k,m[d.k]));return r}
+/* 두 기록 비교: -1 좋아짐, 0 오차 범위, 1 나빠짐 */
+function verdict(k,a,b){if(a==null||b==null)return null;const d=bad(k,b)-bad(k,a);return Math.abs(d)<MDEF[k].noise?0:(d<0?-1:1)}
+/* 비교용 정규화: 복사뼈 원점, 복사뼈→골반이 위, 앞이 +x, 길이는 복사뼈–무릎–골반–어깨 합 = 1 */
+function normSkeleton(P,W,H,front){
+  const F=FRONT[front];const g=k=>P[k]?[P[k][0]*W,P[k][1]*H]:null;const an=g('ankle'),hip=g('hip'),kn=g('knee'),sh=g('shoulder');
+  if(!an||!hip||!kn||!sh||!F)return null;
+  const up=norm(sub(hip,an)),x=frontNormal(up,F),sc=len(sub(kn,an))+len(sub(hip,kn))+len(sub(sh,hip));
+  const o={};PTS.forEach(p=>{const q=g(p.k);if(q)o[p.k]=[dot(sub(q,an),x)/sc,dot(sub(q,an),up)/sc]});return o;
+}
+/* ===== 운동 추천: 측정값 → 의심 원인 → 동작 ===== */
+const EX={
+ lat:{n:'벤치 광배근 스트레칭',t:'광배근·대원근',dose:'30~45초 × 3세트, 숨을 길게 내쉬며',
+  how:['의자나 벤치 앞에 무릎을 꿇고 양 팔꿈치를 올립니다. 손은 뒤통수 쪽으로 모읍니다.','갈비를 내리고 허리를 꺾지 않은 채 엉덩이를 뒤로 빼며 가슴을 바닥 쪽으로 내립니다.','겨드랑이 뒤쪽이 당기는 지점에서 멈추고 숨을 내쉴 때마다 조금 더 내려갑니다.'],
+  mech:'광배근은 팔뼈에서 등과 골반까지 이어져 팔을 아래로 당기는 근육입니다. 짧으면 팔을 올릴 때 중간에서 걸리거나, 골반을 끌고 올라가 허리가 꺾입니다. 허리를 고정한 채 늘려야 허리로 새지 않고 어깨 범위가 늘어납니다.'},
+ tspine:{n:'폼롤러 윗등 펴기',t:'흉추 신전',dose:'위치 2~3곳, 곳마다 호흡 5회',
+  how:['폼롤러를 날개뼈 아래 높이에 가로로 두고 눕습니다. 손은 뒤통수를 받칩니다.','엉덩이는 바닥에 두고 갈비 아래쪽(허리)은 꺾지 않은 채, 윗등만 폼롤러 너머로 넘깁니다.','폼롤러를 조금씩 위로 옮기며 반복합니다.'],
+  mech:'양팔을 머리 위로 올리면 윗등이 약 12~13° 펴지는 움직임이 함께 일어납니다. 윗등이 굽은 채 굳어 있으면 어깨뼈가 뒤로 기울지 못해 팔이 끝까지 올라가지 못하고, 모자란 만큼을 허리가 대신 꺾습니다. 지상 스트림라인에서 윗등 굽이가 큰 선수일수록 견인 시 항력계수가 컸다는 보고가 있습니다.'},
+ trot:{n:'네발기기 윗등 회전',t:'흉추 회전',dose:'한쪽 8회 × 2세트',
+  how:['무릎을 꿇고 엉덩이를 발뒤꿈치에 붙여 허리를 고정합니다. 한 손은 바닥, 반대 손은 뒤통수에 둡니다.','뒤통수 쪽 팔꿈치를 바닥 손 쪽으로 넣었다가 천장 쪽으로 엽니다.','시선이 팔꿈치를 따라가고, 끝에서 한 번 숨을 내쉽니다.'],
+  mech:'윗등은 펴기와 돌리기가 같은 관절에서 일어납니다. 회전이 막혀 있으면 펴는 범위도 함께 줄어 있는 경우가 많아, 회전을 풀어 주면 팔을 올릴 때 필요한 윗등 펴기가 쉬워집니다.'},
+ wallslide:{n:'벽 슬라이드 후 떼기',t:'전거근·하부 승모근(어깨뼈 위쪽 돌림)',dose:'8회 × 2~3세트, 맨 위에서 2초 유지',
+  how:['벽을 보고 서서 아래팔을 벽에 댑니다.','갈비를 내린 채 아래팔로 벽을 밀며 위로 올립니다.','맨 위에서 허리를 꺾지 않고 손을 벽에서 1~2cm 뗍니다.'],
+  mech:'남이 올려 주면 올라가는데 스스로는 못 올리는 범위는, 어깨뼈를 위로 돌리고 뒤로 기울이는 근육이 끝 범위에서 힘을 못 내는 경우입니다. 끝 범위에서 버티는 힘이 생겨야 물속에서 힘을 쓰지 않고도 그 자세가 유지됩니다.'},
+ deadbug:{n:'데드버그 — 팔 머리 위로 뻗기',t:'복부(갈비·골반 고정)',dose:'한쪽 6~8회 × 2~3세트',
+  how:['누워서 허리를 바닥에 붙이고 무릎과 고관절을 90°로 듭니다.','양팔을 스트림라인으로 머리 위로 뻗으며 한쪽 다리를 폅니다.','허리가 바닥에서 뜨기 직전까지만 갑니다. 뜨면 범위를 줄입니다.'],
+  mech:'팔을 올릴 때 갈비가 들리고 허리가 꺾이는 것은 어깨 움직임과 몸통 고정이 분리되지 않아서입니다. 허리를 바닥에 붙인 채 팔을 올리는 연습은 스트림라인에서 필요한 조합(팔은 위로, 갈비는 아래로)을 그대로 훈련합니다.'},
+ wallhold:{n:'벽 스트림라인 버티기',t:'자세 통합',dose:'20~30초 × 3세트',
+  how:['벽에 등을 대고 발뒤꿈치를 벽에서 한 뼘 앞에 둡니다.','허리·갈비·뒤통수를 벽에 붙이고 스트림라인을 잡습니다.','허리가 뜨지 않는 범위에서 손등을 벽 쪽으로 보냅니다. 닿지 않아도 됩니다.'],
+  mech:'벽이 허리 꺾임을 바로 알려 주는 기준이 됩니다. 늘린 범위를 실제 스트림라인 자세로 옮기는 단계이며, 손등과 벽 사이 거리가 그대로 진척 지표가 됩니다.'},
+ hipflex:{n:'반무릎 고관절 앞쪽 스트레칭',t:'장요근·대퇴직근',dose:'한쪽 30~45초 × 2~3세트',
+  how:['한쪽 무릎을 꿇고 반대 발을 앞에 둡니다.','꼬리뼈를 말아 넣고 뒤쪽 엉덩이에 힘을 줍니다.','그 상태로 골반을 살짝 앞으로 밉니다. 허리가 꺾이면 범위를 줄입니다.'],
+  mech:'고관절 앞쪽 근육은 허리뼈와 골반에서 허벅지로 이어집니다. 짧으면 다리를 몸 뒤로 뻗을 때 골반이 앞으로 기울며 허리 아치가 깊어집니다. 스트림라인은 다리가 몸통과 일자여야 하므로 이 길이가 모자라면 허리로 드러납니다.'},
+ chin:{n:'벽 턱 당기기',t:'목 깊은 굴곡근',dose:'5초 유지 × 10회',
+  how:['벽에 등과 뒤통수를 대고 섭니다.','턱을 들거나 숙이지 않고 뒤통수로 벽을 가볍게 밀며 목 뒤를 길게 만듭니다.','익숙해지면 스트림라인을 잡은 채로 합니다.'],
+  mech:'머리가 팔 사이에서 앞으로 빠지면 물을 정면으로 맞는 면적이 늘어납니다. 턱을 당겨 뒤통수를 위팔 사이로 넣는 힘이 있어야 머리가 팔 뒤로 숨습니다.'},
+ triceps:{n:'머리 위 삼두·겨드랑이 스트레칭',t:'삼두근 긴 갈래·광배근',dose:'한쪽 30초 × 2~3세트',
+  how:['한 팔을 머리 위로 올려 팔꿈치를 굽히고 손을 등 뒤로 내립니다.','반대 손으로 팔꿈치를 잡아 머리 뒤쪽으로 당깁니다.','갈비를 내린 채 몸을 반대쪽으로 살짝 기울입니다.'],
+  mech:'삼두근 긴 갈래는 어깨와 팔꿈치를 함께 지납니다. 짧으면 팔을 머리 위로 올린 자세에서 팔꿈치를 끝까지 펴기 어렵습니다. 어깨를 올린 자세에서 늘려야 스트림라인 조건과 같습니다.'},
+ glute:{n:'엉덩이 브리지',t:'둔근(고관절 펴기)',dose:'10회 × 2세트, 맨 위에서 2초',
+  how:['누워서 무릎을 세웁니다.','갈비를 내리고 엉덩이 힘으로 골반을 들어 어깨–골반–무릎을 일자로 만듭니다.','허리로 밀어 올리지 않습니다.'],
+  mech:'엉덩이가 뒤로 빠지는 자세는 고관절을 끝까지 펴는 힘이 약할 때 나타납니다. 허리를 쓰지 않고 엉덩이로 고관절을 펴는 연습이 몸통과 다리를 일자로 잇는 바탕이 됩니다.'}
+};
+function f1(v){return (Math.round(v*10)/10).toFixed(1)}
+function recommend(m,t){
+  t=t||{};const r=rateAll(m),F=[],R=[];const add=(id,why)=>{if(!R.find(x=>x.id===id))R.push({id,why})};
+  const sh=m.shoulder,arch=m.arch,hip=m.hip;
+  const shLim=r.shoulder>=1,archDeep=arch!=null&&r.arch>=1,leanBack=hip<-4,archComp=archDeep||leanBack;
+  const archTxt=arch==null?'허리 아치는 측정하지 않았습니다(몸통 윤곽 점 없음)':'허리 아치 깊이는 '+f1(arch)+'%입니다';
+  let cause=null;
+  if(shLim||archComp){
+    if(t.supine==='fail'||t.supine==='arch')cause='length';
+    else if(t.supine==='pass'&&(t.wall==='fail'||t.wall==='arch'))cause='control';
+    else if(t.wall==='pass'&&t.supine!=='fail'&&t.supine!=='arch')cause='technique';
+    else cause='unknown';
+    let title,text,ev=['어깨 굴곡 부족 '+f1(sh)+'°'];if(arch!=null)ev.push('허리 아치 '+f1(arch)+'%');if(leanBack)ev.push('몸통 뒤로 젖힘 '+f1(-hip)+'°');
+    if(shLim&&!archComp){title='팔이 몸통선까지 올라오지 못합니다';
+      text='위팔이 몸통선보다 '+f1(sh)+'° 앞에 있습니다. '+archTxt+'. 허리를 꺾어 메우는 모습은 크지 않아, 팔이 올라가는 범위 자체가 모자란 형태입니다. 물속에서는 팔과 머리가 몸통보다 앞쪽 아래로 나와 물을 맞는 면적이 커집니다.'}
+    else if(!shLim&&archComp){title='허리를 꺾어서 일직선을 만들고 있을 가능성이 있습니다';
+      text='팔은 몸통선에 거의 맞습니다(부족 '+f1(sh)+'°). 그런데 '+(archDeep?'허리 아치가 '+f1(arch)+'%로 깊고':'')+(archDeep&&leanBack?', ':'')+(leanBack?'몸통이 허벅지선보다 '+f1(-hip)+'° 뒤로 젖혀져 있습니다':'')+(archDeep&&!leanBack?' 있습니다':'')+'. 팔을 올리는 범위가 모자랄 때 갈비를 들고 허리를 꺾으면 팔이 곧게 선 것처럼 보입니다. 이 경우 실제 제한은 어깨나 윗등에 있고, 물속에서는 배가 처지고 다리가 가라앉는 쪽으로 나타납니다.'}
+    else{title='어깨 범위 부족과 허리 꺾임이 함께 보입니다';
+      text='위팔이 몸통선보다 '+f1(sh)+'° 앞에 있고, '+(archDeep?'허리 아치도 '+f1(arch)+'%로 깊습니다':'몸통도 '+f1(-hip)+'° 뒤로 젖혀져 있습니다')+'. 허리로 보상하고도 팔이 다 올라오지 못한 상태라, 허리를 편 조건에서는 부족각이 지금 수치보다 더 클 것입니다.'}
+    F.push({title,level:Math.max(r.shoulder||0,r.arch||0,leanBack?1:0),ev,text});
+    const C={
+     length:{title:'원인 추정: 근육 길이 제한',text:'누워서 허리를 붙인 채로는 팔이 바닥에 닿지 않았습니다. 등이 받쳐지고 중력이 팔을 내려 주는 조건에서도 닿지 않으면, 힘보다 길이(광배근·대원근 등 팔을 아래로 당기는 근육) 쪽 제한일 가능성이 큽니다.',ex:['lat','tspine','wallhold','deadbug']},
+     control:{title:'원인 추정: 범위는 있는데 스스로 쓰지 못함',text:'누워서는 닿는데 서서 벽에서는 닿지 않았습니다. 길이는 충분하다는 뜻이라, 스트레칭을 늘리기보다 그 범위를 스스로 쓰는 힘과 조절(어깨뼈 위쪽 돌림, 윗등 펴기, 갈비 고정)이 먼저입니다.',ex:['wallslide','deadbug','tspine','wallhold']},
+     technique:{title:'원인 추정: 범위는 충분, 자세에서 다 쓰지 않음',text:'벽 테스트를 통과했습니다. 가동범위는 충분한데 스트림라인을 잡을 때 다 쓰지 않은 것으로 보입니다. 마커 위치와 촬영 각도를 먼저 다시 확인하고, 자세 감각을 맞추는 연습이면 충분합니다.',ex:['wallhold','deadbug']},
+     unknown:{title:'원인은 아직 가릴 수 없습니다',text:'사진만으로는 근육 길이 문제인지, 윗등이 굳은 것인지, 조절 문제인지 구분되지 않습니다. 아래 감별 테스트 중 벽 테스트와 누워서 하는 테스트를 입력하면 추천이 좁혀집니다. 그 전까지는 세 가지를 조금씩 다루는 구성입니다.',ex:['lat','tspine','wallslide','deadbug']}
+    }[cause];
+    F.push({title:C.title,level:cause==='unknown'?1:0,ev:[],text:C.text});
+    const whyBase=shLim?'어깨 굴곡 부족 '+f1(sh)+'°':(archDeep?'허리 아치 '+f1(arch)+'%':'몸통 뒤로 젖힘 '+f1(-hip)+'°');
+    C.ex.forEach(id=>add(id,whyBase+' 때문에 추천합니다.'));
+    if(archComp&&(cause==='technique'||r.arch===2)){
+      F.push({title:'허리 아치가 어깨와 무관할 수도 있습니다',level:1,ev:[],text:'팔을 내리고 선 측면 사진에서도 아치가 비슷하게 깊다면, 팔을 올려서 생긴 보상이 아니라 골반이 앞으로 기운 자세 자체일 가능성이 있습니다. 이때는 고관절 앞쪽 길이가 관련됩니다.'});
+      add('hipflex',(arch!=null?'허리 아치 '+f1(arch)+'%':'몸통 뒤로 젖힘 '+f1(-hip)+'°')+'가 팔 위치와 상관없이 남는 경우를 대비해 추천합니다.');
+    }
+  }
+  if(t.trot==='limited'||t.trot==='asym'){
+    F.push({title:'윗등 회전이 제한되어 있습니다',level:1,ev:[],text:(t.trot==='asym'?'한쪽이 덜 돌아갑니다. ':'양쪽 모두 절반에 못 미칩니다. ')+'윗등은 돌리기와 펴기가 같은 관절에서 일어나므로, 팔을 머리 위로 올릴 때 필요한 윗등 펴기도 함께 줄어 있을 가능성이 있습니다.'});
+    add('trot','윗등 회전 테스트 결과가 제한으로 나와 추천합니다.');add('tspine','윗등 회전이 제한되어 펴기 범위도 함께 다룹니다.');
+  }
+  if(r.head>=1){
+    if(m.head>0){F.push({title:'머리가 몸통선보다 앞에 있습니다',level:r.head,ev:['머리 전방 편차 '+f1(m.head)+'%'],text:'귀가 몸통선보다 몸통 길이의 '+f1(m.head)+'%만큼 앞에 있습니다. '+(shLim?'팔이 뒤로 넘어가지 못하면 머리가 팔 뒤로 숨을 자리가 없어 함께 나타나는 경우가 많으므로, 어깨 쪽을 먼저 다루고 이 수치가 따라 줄어드는지 봅니다.':'팔 위치는 괜찮은데 머리만 앞으로 나와 있어, 턱을 당겨 뒤통수를 위팔 사이로 넣는 연습이 직접적입니다.')});add('chin','머리 전방 편차 '+f1(m.head)+'% 때문에 추천합니다.')}
+    else F.push({title:'머리가 뒤로 젖혀져 있습니다',level:r.head,ev:['머리 전방 편차 '+f1(m.head)+'%'],text:'귀가 몸통선보다 뒤에 있습니다. 턱이 들린 자세일 수 있습니다. 시선을 정면 아래로 두고 목 뒤를 길게 만드는 것만으로 바뀌는지 다음 사진에서 확인합니다.'});
+  }
+  if(r.elbow>=1){
+    if(t.elbow==='fail')F.push({title:'팔꿈치가 다 펴지지 않습니다',level:r.elbow,ev:['팔꿈치 굽힘 '+f1(m.elbow)+'°'],text:'팔을 앞으로 뻗었을 때도 다 펴지지 않는다고 입력하셨습니다. 관절 구조에 따른 것일 수 있어 억지로 늘리는 동작은 추천하지 않습니다. 수치만 추적합니다.'});
+    else{F.push({title:'머리 위에서 팔꿈치가 굽습니다',level:r.elbow,ev:['팔꿈치 굽힘 '+f1(m.elbow)+'°'],text:'팔꿈치가 '+f1(m.elbow)+'° 굽어 있습니다. 앞으로 뻗으면 다 펴지는데 머리 위에서만 굽는다면 팔꿈치 문제가 아닙니다. 어깨 범위가 모자랄 때 손을 포개려고 팔꿈치를 굽혀 길이를 맞추거나, 어깨와 팔꿈치를 함께 지나는 삼두근 긴 갈래가 당기는 경우입니다.'+(t.elbow?'':' 팔을 앞으로 뻗어 펴지는지 감별 테스트에 입력하면 확정됩니다.')});add('triceps','팔꿈치 굽힘 '+f1(m.elbow)+'° 때문에 추천합니다.');add('lat','팔꿈치 굽힘이 어깨 범위 부족에서 올 수 있어 함께 다룹니다.')}
+  }
+  if(hip>4&&r.hip>=1){F.push({title:'엉덩이가 뒤로 빠져 있습니다',level:r.hip,ev:['골반 각 +'+f1(hip)+'°'],text:'몸통이 허벅지선보다 '+f1(hip)+'° 앞으로 숙여져 있습니다. 팔을 올릴 때 균형을 잡으려는 보상이거나 고관절을 끝까지 펴는 힘이 덜 쓰인 자세입니다. 물속에서는 엉덩이가 꺾인 만큼 다리가 내려갑니다.'});add('glute','골반 각 +'+f1(hip)+'° 때문에 추천합니다.');add('wallhold','몸통과 다리를 일자로 잇는 감각을 맞추려고 추천합니다.')}
+  if(r.knee>=1)F.push({title:m.knee>0?'무릎이 굽어 있습니다':'무릎이 뒤로 밀려 있습니다',level:r.knee,ev:['무릎 '+f1(m.knee)+'°'],text:'서서 찍을 때 균형 때문에 나타나는 경우가 많아 우선순위는 낮습니다. 허벅지 앞에 힘을 주어 무릎을 곧게 한 뒤 다시 찍어 비교합니다.'});
+  if(r.wrist>=1)F.push({title:'손목이 꺾여 있습니다',level:r.wrist,ev:['손목 '+f1(m.wrist)+'°'],text:'손이 아래팔 연장선에서 '+(m.wrist>0?'앞으로':'뒤로')+' 꺾여 있습니다. 손을 포갠 뒤 위 손 엄지로 아래 손을 감아 고정하고, 손끝을 진행 방향으로 밀어 내는 것으로 교정합니다. 별도 운동은 필요하지 않습니다.'});
+  if(!F.length){F.push({title:'정렬이 잠정 기준 안에 있습니다',level:0,ev:['전체 일직선 편차 '+f1(m.line)+'%'],text:'모든 지표가 양호 범위입니다. 지상에서는 유지 수준이면 충분하고, 다음 단계는 같은 정렬이 물속 스트림라인 영상에서도 나오는지 확인하는 것입니다.'});add('wallhold','현재 정렬을 유지하려고 추천합니다.');add('deadbug','현재 정렬을 유지하려고 추천합니다.')}
+  return {findings:F,routine:R.slice(0,5),cause};
+}
+</script>
+
+<script>
+/* ===== 화면부 ===== */
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+const sgn=(k,v)=>(['wrist','head','hip','knee','shoulder'].includes(k)&&v>0?'+':'')+f1(v);
+const S={recs:[],tests:{},photos:new Map(),view:'measure',draft:null,drag:null,cmpA:null,cmpB:null,trend:'line',planRec:null,delAsk:null};
+const LS={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
+let toastT;function toast(msg){const t=$('#toast');t.textContent=msg;t.style.display='block';clearTimeout(toastT);toastT=setTimeout(()=>t.style.display='none',3800)}
+
+/* ----- 저장소: 계정 저장 우선, 안 되면 이 브라우저 ----- */
+const Store={mode:'checking',col:null,pcol:null,migrated:false,
+  async init(){
+    S.recs=LS.get('sl_recs',[]);S.tests=LS.get('sl_tests',{});
+    let db=null,user=null,uid=null;
+    for(let i=0;i<10&&!(window.claude&&window.claude.use);i++)await new Promise(r=>setTimeout(r,200));
+    try{if(window.claude&&window.claude.use){[db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')])}}catch(e){}
+    try{uid=user?await user.id():null}catch(e){}
+    if(!db||!uid){this.mode='local';refresh();return}
+    try{this.col=db.collection('data/users/'+uid);this.pcol=db.doc('data/users/'+uid+'/photos').collection('p')}catch(e){this.mode='local';refresh();return}
+    const timer=setTimeout(()=>{if(this.mode==='checking'){this.mode='slow';refresh()}},10000);
+    this.col.onSnapshot(snap=>{
+      if(!snap.metadata.fromCache)clearTimeout(timer);
+      const recs=[];let tests=null;
+      snap.docs.forEach(d=>{const x=d.data();if(!x)return;if(d.id==='settings')tests=x.tests||{};else if(d.id.indexOf('rec_')===0)recs.push(JSON.parse(JSON.stringify(x)))});
+      this.mode='cloud';S.recs=recs;if(tests)S.tests=JSON.parse(JSON.stringify(tests));
+      if(!this.migrated&&!snap.metadata.fromCache){this.migrated=true;this.migrate(recs)}
+      refresh();
+    },()=>{clearTimeout(timer);this.mode='local';S.recs=LS.get('sl_recs',[]);refresh()});
+  },
+  async migrate(cloud){ /* 이 브라우저에만 있던 기록을 계정으로 옮김 */
+    const local=LS.get('sl_recs',[]);if(!local.length)return;const left=[];
+    for(const r of local){if(cloud.find(c=>c.id===r.id)){LS.del('sl_p_'+r.id);continue}
+      try{await this.col.doc(r.id).set(r);const p=LS.get('sl_p_'+r.id,null);if(p)await this.pcol.doc(r.id).set({d:p});LS.del('sl_p_'+r.id)}catch(e){left.push(r)}}
+    LS.set('sl_recs',left);
+  },
+  saveLocal(rec,photo){const a=LS.get('sl_recs',[]).filter(r=>r.id!==rec.id);
+    if(photo&&!LS.set('sl_p_'+rec.id,photo)){rec.hasPhoto=false}
+    a.push(rec);if(!LS.set('sl_recs',a))return false;S.recs=a;return true},
+  async save(rec,photo){ /* 반환: 'cloud' | 'local' | 'nophoto' | 'fail' */
+    if(photo)S.photos.set(rec.id,photo);
+    if(this.mode==='cloud'){
+      try{await this.col.doc(rec.id).set(rec);
+        if(photo){try{await this.pcol.doc(rec.id).set({d:photo})}catch(e){rec.hasPhoto=false;try{await this.col.doc(rec.id).set(rec)}catch(e2){}return 'nophoto'}}
+        return 'cloud'}catch(e){}
+    }
+    const ok=this.saveLocal(rec,photo);if(!ok)return 'fail';return rec.hasPhoto===false&&photo?'nophoto':'local';
+  },
+  async remove(id){S.photos.delete(id);
+    if(this.mode==='cloud'&&!LS.get('sl_recs',[]).find(r=>r.id===id)){try{await this.col.doc(id).delete();await this.pcol.doc(id).delete()}catch(e){toast('삭제하지 못했습니다. 연결 상태를 확인해 주세요.')}return}
+    const a=LS.get('sl_recs',[]).filter(r=>r.id!==id);LS.set('sl_recs',a);LS.del('sl_p_'+id);if(this.mode!=='cloud')S.recs=a;else S.recs=S.recs.filter(r=>r.id!==id);
+  },
+  async photo(rec){if(rec.ex)return rec.photo;if(S.photos.has(rec.id))return S.photos.get(rec.id);if(rec.hasPhoto===false)return null;
+    let p=LS.get('sl_p_'+rec.id,null);
+    if(!p&&this.mode==='cloud'){try{const s=await this.pcol.doc(rec.id).get();if(s.exists)p=s.data().d}catch(e){}}
+    S.photos.set(rec.id,p||null);return p||null},
+  async saveTests(t){S.tests=t;LS.set('sl_tests',t);if(this.mode==='cloud'){try{await this.col.doc('settings').set({tests:t})}catch(e){}}}
+};
+
+/* ----- 예시 데이터: 기록이 없을 때만 보임 ----- */
+function mannequin(P,W,H){const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');
+  const g=x.createLinearGradient(0,0,0,H);g.addColorStop(0,'#c9d6da');g.addColorStop(1,'#aebdc2');x.fillStyle=g;x.fillRect(0,0,W,H);
+  x.fillStyle='#8c9da3';x.fillRect(0,H*0.955,W,H*0.045);
+  const q=k=>[P[k][0]*W,P[k][1]*H];const seg=(ks,w,col)=>{x.strokeStyle=col;x.lineWidth=w;x.lineCap='round';x.lineJoin='round';x.beginPath();ks.forEach((k,i)=>{const p=q(k);i?x.lineTo(p[0],p[1]):x.moveTo(p[0],p[1])});x.stroke()};
+  const body='#e9c9ae',suit='#1f3b47';
+  seg(['shoulder','elbow','wrist','finger'],W*0.06,body);seg(['ankle','knee','hip'],W*0.1,body);
+  const e=q('ear');x.fillStyle=body;x.beginPath();x.arc(e[0]+W*0.012,e[1],W*0.075,0,7);x.fill();
+  seg(['hip','shoulder'],W*0.2,body);
+  const hp=q('hip');x.strokeStyle=suit;x.lineWidth=W*0.2;x.lineCap='butt';x.beginPath();x.moveTo(hp[0],hp[1]+H*0.035);x.lineTo(hp[0]+ (q('shoulder')[0]-hp[0])*0.12,hp[1]-H*0.03);x.stroke();
+  const a=q('ankle');x.strokeStyle=body;x.lineWidth=W*0.05;x.lineCap='round';x.beginPath();x.moveTo(a[0],a[1]+H*0.012);x.lineTo(a[0]+W*0.1,a[1]+H*0.02);x.stroke();
+  x.fillStyle='rgba(15,35,43,.75)';x.font='600 '+Math.round(W*0.05)+'px sans-serif';x.fillText('예시 그림',W*0.04,H*0.06);
+  return c.toDataURL('image/jpeg',0.8)}
+const EXP=[
+ {id:'ex_1',date:'2026-10-05',note:'예시 1 — 교정 전',pts:{finger:[.668,.062],wrist:[.652,.118],elbow:[.607,.236],shoulder:[.52,.356],ear:[.585,.305],hip:[.5,.6],knee:[.508,.775],ankle:[.488,.938],back:[.408,.4],lumbar:[.456,.522],butt:[.398,.622],rib:[.63,.474]}},
+ {id:'ex_2',date:'2026-11-02',note:'예시 2 — 4주 뒤',pts:{finger:[.556,.058],wrist:[.55,.114],elbow:[.538,.234],shoulder:[.512,.356],ear:[.548,.3],hip:[.5,.6],knee:[.502,.775],ankle:[.492,.938],back:[.408,.4],lumbar:[.434,.522],butt:[.4,.622],rib:[.612,.474]}}
+];
+let EXC=null;function examples(){if(!EXC)EXC=EXP.map(e=>({...e,ex:true,front:'right',W:600,H:1000,hasPhoto:true,photo:mannequin(e.pts,600,1000)}));return EXC}
+function recs(){const a=S.recs.length?S.recs:examples();return a.slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:(x.id<y.id?-1:1))}
+const isEx=()=>!S.recs.length;
+const M=r=>computeMetrics(r.pts,r.W,r.H,r.front);
+
+/* ----- 사진 위 선·점 그리기 (점은 길이 0인 둥근 선: 확대와 무관하게 같은 크기) ----- */
+function overlay(P,W,H,o){o=o||{};const g=k=>P[k]?[P[k][0]*W,P[k][1]*H]:null;let s='';
+  const ln=(a,b,col,w,dash)=>a&&b?'<line x1="'+a[0]+'" y1="'+a[1]+'" x2="'+b[0]+'" y2="'+b[1]+'" stroke="'+col+'" stroke-width="'+w+'" vector-effect="non-scaling-stroke" stroke-linecap="round"'+(dash?' stroke-dasharray="'+dash+'"':'')+'/>':'';
+  const k=o.k||(o.thin?0.6:1);
+  s+=ln(g('ankle'),g('finger'),'#ffffff',1.5*k,'6 5');
+  const sh=g('shoulder'),hip=g('hip'),el=g('elbow'),wr=g('wrist');
+  if(sh&&hip&&el){const u=norm(sub(sh,hip)),L=len(sub(el,sh))+(wr?len(sub(wr,el)):0);s+=ln(sh,[sh[0]+u[0]*L,sh[1]+u[1]*L],'#ffd43b',1.5*k,'3 4')}
+  const chain=['finger','wrist','elbow','shoulder','hip','knee','ankle'];
+  for(let i=0;i<chain.length-1;i++){s+=ln(g(chain[i]),g(chain[i+1]),'#0b1519',5*k);}
+  for(let i=0;i<chain.length-1;i++){s+=ln(g(chain[i]),g(chain[i+1]),'#3ddcf0',2.5*k);}
+  s+=ln(g('back'),g('lumbar'),'#ff8fd8',2*k,'2 4')+ln(g('lumbar'),g('butt'),'#ff8fd8',2*k,'2 4');
+  PTS.forEach(p=>{const q=g(p.k);if(!q)return;const cur=o.cur===p.k,col=p.opt?'#ff8fd8':(p.k==='ear'?'#ffffff':'#ffd43b');
+    s+=ln(q,q,'#0b1519',(cur?19:13)*k)+ln(q,q,cur?'#ffffff':col,(cur?14:9)*k)+(cur?ln(q,q,col,7*k):'')});
+  return s}
+function shotHTML(r,photo,tag,tiny){const svg='<svg viewBox="0 0 '+r.W+' '+r.H+'" preserveAspectRatio="none">'+overlay(r.pts,r.W,r.H,tiny?{k:0.28}:{thin:true})+'</svg>';
+  const img=photo?'<img src="'+photo+'" alt="'+esc(r.date)+' 측면 사진">':'<svg class="ph" viewBox="0 0 '+r.W+' '+r.H+'" style="position:static" role="img" aria-label="사진 없음"><rect width="'+r.W+'" height="'+r.H+'" fill="#31454d"/></svg>';
+  return '<div class="shot">'+img+svg+(tag?'<span class="tag">'+esc(tag)+'</span>':'')+'</div>'}
+function pillHTML(k,v){const r=rate(k,v);if(v==null)return '<span class="pill n">미측정</span>';if(r==null)return '<span class="pill n">추적용</span>';return ['<span class="pill g">양호</span>','<span class="pill w">주의</span>','<span class="pill b">개선 필요</span>'][r]}
+
+/* ----- 사진 불러오기: 긴 변 1100px 이하, 약 150KB 이하로 줄임 ----- */
+function fileToPhoto(file){return new Promise((res,rej)=>{const url=URL.createObjectURL(file),im=new Image();
+  im.onload=()=>{let edge=1100,q=.78,out;for(let i=0;i<7;i++){const sc=Math.min(1,edge/Math.max(im.naturalWidth,im.naturalHeight)),c=document.createElement('canvas');c.width=Math.round(im.naturalWidth*sc);c.height=Math.round(im.naturalHeight*sc);c.getContext('2d').drawImage(im,0,0,c.width,c.height);out={d:c.toDataURL('image/jpeg',q),W:c.width,H:c.height};if(out.d.length<=200000)break;edge*=.85;q-=.05}URL.revokeObjectURL(url);res(out)};
+  im.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('img'))};im.src=url})}
+
+/* ===== 측정 화면 ===== */
+function newDraftFromExample(){const e=examples()[1];return {id:null,ex:true,date:today(),note:'',front:'right',W:e.W,H:e.H,photo:e.photo,pts:JSON.parse(JSON.stringify(e.pts)),target:null}}
+function nextTarget(d){const p=PTS.find(p=>!d.pts[p.k]);return p?p.k:null}
+function viewMeasure(){if(!S.draft)S.draft=newDraftFromExample();const d=S.draft;
+  return '<section class="measure">'+
+  '<div class="card">'+
+    (d.ex?'<div class="banner">지금 보이는 것은 예시 그림입니다. 내 측면 사진을 선택하면 바뀝니다.</div>':'')+
+    '<div class="row"><label class="btn primary" for="file" tabindex="0">'+(d.ex?'측면 사진 선택':'다른 사진으로 바꾸기')+'</label><input id="file" type="file" accept="image/*" hidden>'+
+    '<span class="small muted">정측면, 전신, 카메라는 허리 높이. <a href="#guide">촬영 조건 보기</a></span></div>'+
+    '<div class="stagebox"><div class="stage" id="stage"><img id="stageImg" src="'+d.photo+'" alt="마킹할 측면 사진"><svg id="stageSvg" viewBox="0 0 '+d.W+' '+d.H+'" preserveAspectRatio="none"></svg><canvas id="loupe" width="256" height="256"></canvas></div></div>'+
+    '<div id="guideLine" class="banner"></div>'+
+    '<div class="chips" id="chips"></div>'+
+    '<div class="row"><span class="small muted" id="frontLbl">사진에서 배가 향한 쪽</span><div class="seg" role="group" aria-labelledby="frontLbl">'+
+      [['left','← 왼쪽'],['right','오른쪽 →'],['up','↑ 위'],['down','↓ 아래']].map(f=>'<button type="button" data-front="'+f[0]+'" aria-pressed="'+(d.front===f[0])+'">'+f[1]+'</button>').join('')+'</div></div>'+
+  '</div>'+
+  '<div class="card">'+
+    '<div class="row"><div class="field"><label for="dDate">촬영일</label><input id="dDate" type="date" value="'+esc(d.date)+'"></div>'+
+    '<div class="field" style="flex:2"><label for="dNote">메모</label><input id="dNote" type="text" maxlength="80" placeholder="예: 훈련 전, 스트레칭 4주차" value="'+esc(d.note)+'"></div></div>'+
+    '<div id="mpanel"></div>'+
+    '<div class="row"><button class="btn primary" id="saveBtn" type="button">기록 저장</button><span class="small muted" id="saveHint"></span></div>'+
+  '</div></section>'}
+function updateStage(){const d=S.draft;if(!d||S.view!=='measure')return;const svg=$('#stageSvg');if(!svg)return;
+  svg.innerHTML=overlay(d.pts,d.W,d.H,{cur:d.target});
+  const t=d.target&&PTS.find(p=>p.k===d.target),nx=nextTarget(d);
+  $('#guideLine').innerHTML=t?(d.pts[t.k]?'<b>'+t.n+'</b> 선택됨. 끌어서 옮기거나 <button class="btn sm" type="button" data-clear="'+t.k+'">이 점 지우기</button>':'사진에서 <b>'+t.n+'</b> 위치를 누르세요. '+esc(t.hint)+'.'+(t.opt?' <span class="muted">(선택 항목: 허리 아치·갈비 측정용)</span>':'')+' <span class="muted small">앞서 찍은 점을 고치려면 아래에서 그 이름을 누른 뒤 끌어 옮기세요.</span>')
+    :(nx?'아래에서 찍을 점을 고르세요.':'12점을 모두 찍었습니다. 점을 끌면 위치를 고칠 수 있습니다.');
+  $('#chips').innerHTML=PTS.map(p=>'<button type="button" class="chip'+(d.pts[p.k]?' done':'')+(d.target===p.k?' cur':'')+'" data-pt="'+p.k+'">'+p.n+(p.opt?'<span class="mk">선택</span>':'')+(d.pts[p.k]?'<span class="mk">✓</span>':'')+'</button>').join('');
+  updateMetrics()}
+function updateMetrics(){const d=S.draft,m=computeMetrics(d.pts,d.W,d.H,d.front),el=$('#mpanel');if(!el)return;let h='';
+  if(!m.ok){h='<div class="banner warn">'+(m.missing.length?'아직 찍지 않은 필수 점: <b>'+m.missing.map(k=>PNAME[k]).join(', ')+'</b>':'배가 향한 쪽을 골라 주세요.')+'</div>'}
+  else{
+    if(m.frontBad)h+='<div class="banner bad">고른 방향(배가 향한 쪽)이 몸이 뻗은 방향과 같습니다. 방향을 다시 골라 주세요.</div>';
+    if(m.tilt>5)h+='<div class="banner warn">몸 전체가 '+(m.lying?'수평':'수직')+'에서 '+f1(m.tilt)+'° 기울어 있습니다. 카메라가 기울었거나 몸이 기운 상태입니다. 각도 지표는 영향이 작지만 같은 조건으로 찍는 것이 좋습니다.</div>';
+    const r=rate('line',m.line),dv=m.devs[m.lineMax];
+    h+='<div class="hero"><div><div class="small muted">전체 일직선 편차</div><div class="big">'+f1(m.line)+'<span style="font-size:18px">%</span></div></div><div>'+pillHTML('line',m.line)+'<div class="small muted">가장 벗어난 곳: '+PNAME[m.lineMax]+' ('+(dv>0?'앞으로 ':'뒤로 ')+f1(Math.abs(dv))+'%)</div></div></div>';
+    h+='<div class="tscroll"><table class="mt"><tr><th>지표</th><th style="text-align:right">값</th><th style="text-align:right">판정</th></tr>'+
+      METRICS.filter(x=>x.k!=='line').map(x=>'<tr><td><b>'+x.n+'</b><div class="small muted">'+x.d+'</div></td><td class="v">'+(m[x.k]==null?'–':sgn(x.k,m[x.k])+x.u)+'</td><td class="s">'+pillHTML(x.k,m[x.k])+'</td></tr>').join('')+'</table></div>';
+    if(m.arch==null)h+='<p class="small muted">허리 아치는 등 정점·허리 오목·엉덩이 정점 3점을 찍으면 계산됩니다. 허리로 보상하는지 가리려면 필요합니다.</p>';
+    h+='<p class="small muted">판정 기준은 잠정값이며 공인된 규준이 아닙니다. 손으로 찍는 점은 ±2~3° 오차가 있어, 본인 기록끼리 비교하는 용도가 가장 믿을 만합니다.</p>';
+  }
+  el.innerHTML=h;const sb=$('#saveBtn');if(sb){sb.disabled=!m.ok||d.ex;$('#saveHint').textContent=d.ex?'예시 그림은 저장되지 않습니다.':(m.ok?(d.id?'기존 기록을 고칩니다.':''):'필수 8점을 찍으면 저장할 수 있습니다.')}}
+function stagePos(e){const b=$('#stage').getBoundingClientRect();return [Math.max(0,Math.min(1,(e.clientX-b.left)/b.width)),Math.max(0,Math.min(1,(e.clientY-b.top)/b.height)),b]}
+function drawLoupe(nx,ny,b){const lp=$('#loupe'),img=$('#stageImg'),d=S.draft;if(!lp||!img.naturalWidth)return;const c=lp.getContext('2d'),z=2.6,disp=b.width/img.naturalWidth,src=128/(z*disp);
+  c.fillStyle='#000';c.fillRect(0,0,256,256);c.drawImage(img,nx*img.naturalWidth-src/2,ny*img.naturalHeight-src/2,src,src,0,0,256,256);
+  c.strokeStyle='rgba(255,255,255,.95)';c.lineWidth=2;c.beginPath();c.moveTo(128,96);c.lineTo(128,118);c.moveTo(128,138);c.lineTo(128,160);c.moveTo(96,128);c.lineTo(118,128);c.moveTo(138,128);c.lineTo(160,128);c.stroke();
+  c.strokeStyle='#ffd43b';c.beginPath();c.arc(128,128,5,0,7);c.stroke();
+  const px=nx*b.width,py=ny*b.height;let lx=px-64,ly=py-150;if(ly<-20)ly=py+34;lx=Math.max(-10,Math.min(b.width-118,lx));lp.style.left=lx+'px';lp.style.top=ly+'px';lp.style.display='block'}
+function bindStage(){const st=$('#stage');if(!st)return;
+  st.addEventListener('pointerdown',e=>{const d=S.draft,[nx,ny,b]=stagePos(e);let hit=null,best=30;
+    /* 아직 안 찍은 점이 선택돼 있으면 누른 자리에 바로 찍음(가까운 기존 점을 잘못 잡지 않게). 아니면 가장 가까운 점을 잡아 옮김 */
+    if(d.target&&!d.pts[d.target]){hit=d.target;d.pts[hit]=[nx,ny]}
+    else{PTS.forEach(p=>{const q=d.pts[p.k];if(!q)return;const dist=Math.hypot((q[0]-nx)*b.width,(q[1]-ny)*b.height)-(p.k===d.target?12:0);if(dist<best){best=dist;hit=p.k}});
+      if(!hit){d.target=nextTarget(d);if(!d.target)return;hit=d.target;d.pts[hit]=[nx,ny]}}
+    d.target=hit;S.drag={k:hit,off:[d.pts[hit][0]-nx,d.pts[hit][1]-ny]};try{st.setPointerCapture(e.pointerId)}catch(x){}
+    updateStage();drawLoupe(d.pts[hit][0],d.pts[hit][1],b);e.preventDefault()});
+  st.addEventListener('pointermove',e=>{if(!S.drag)return;const d=S.draft,[nx,ny,b]=stagePos(e);const x=Math.max(0,Math.min(1,nx+S.drag.off[0])),y=Math.max(0,Math.min(1,ny+S.drag.off[1]));d.pts[S.drag.k]=[x,y];$('#stageSvg').innerHTML=overlay(d.pts,d.W,d.H,{cur:d.target});updateMetrics();drawLoupe(x,y,b)});
+  const end=()=>{if(!S.drag)return;const d=S.draft,k=S.drag.k;S.drag=null;$('#loupe').style.display='none';d.pts[k]=d.pts[k].map(v=>Math.round(v*10000)/10000);const nx=nextTarget(d);if(nx)d.target=nx;updateStage()};
+  st.addEventListener('pointerup',end);st.addEventListener('pointercancel',end)}
+
+/* ===== 기록·비교 화면 ===== */
+function trendSVG(list,k){const def=MDEF[k],pts=list.map(r=>({r,v:M(r)[k]})).filter(p=>p.v!=null);if(!pts.length)return '<p class="muted small">이 지표가 측정된 기록이 없습니다.</p>';
+  const W=380,H=220,L=38,R=14,T=16,B=30;const vals=pts.map(p=>p.v),th=def.th;let lo=Math.min(0,...vals),hi=Math.max(...vals,th?th[1]*1.15:0,1);const signed=['wrist','head','hip','knee'].includes(k);if(signed){const a=Math.max(Math.abs(lo),Math.abs(hi),th?th[1]*1.15:0);lo=-a;hi=a}
+  if(k==='shoulder'&&lo<0)lo=Math.min(lo,-2);const pad=(hi-lo)*.08;hi+=pad;if(lo<0)lo-=pad;
+  const X=i=>pts.length===1?(L+(W-L-R)/2):L+i*(W-L-R)/(pts.length-1),Y=v=>T+(hi-v)*(H-T-B)/(hi-lo);let s='';
+  if(th){const g0=signed?-th[0]:Math.max(lo,k==='shoulder'?lo:0),y1=Y(th[0]),y0=Y(g0);s+='<rect x="'+L+'" y="'+y1+'" width="'+(W-L-R)+'" height="'+Math.max(0,y0-y1)+'" fill="var(--good-soft)"/><text x="'+(W-R-4)+'" y="'+(y1+13)+'" text-anchor="end" font-size="11" fill="var(--good)">양호 범위</text>'}
+  const ticks=4;for(let i=0;i<=ticks;i++){const v=lo+(hi-lo)*i/ticks,y=Y(v);s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+y+'" y2="'+y+'" stroke="var(--line)" stroke-width="1"/><text x="'+(L-6)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="var(--muted)">'+f1(v)+'</text>'}
+  if(lo<0)s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(0)+'" y2="'+Y(0)+'" stroke="var(--muted)" stroke-width="1"/>';
+  s+='<polyline fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" points="'+pts.map((p,i)=>X(i)+','+Y(p.v)).join(' ')+'"/>';
+  const step=Math.ceil(pts.length/6);pts.forEach((p,i)=>{const last=i===pts.length-1;s+='<circle cx="'+X(i)+'" cy="'+Y(p.v)+'" r="'+(last?6:4)+'" fill="'+(last?'var(--accent)':'var(--surface)')+'" stroke="var(--accent)" stroke-width="2"/>';
+    if(i%step===0||last)s+='<text x="'+X(i)+'" y="'+(H-12)+'" text-anchor="'+(pts.length>1&&last?'end':pts.length>1&&i===0?'start':'middle')+'" font-size="11" fill="var(--muted)">'+esc(p.r.date.slice(5).replace('-','.'))+'</text>';
+    if(last)s+='<text x="'+X(i)+'" y="'+(Y(p.v)-11)+'" text-anchor="'+(pts.length>1?'end':'middle')+'" font-size="13" font-weight="700" fill="var(--ink)">'+sgn(k,p.v)+def.u+'</text>'});
+  return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(def.n)+' 추이">'+s+'</svg>'}
+function skeletonSVG(a,b){const A=normSkeleton(a.pts,a.W,a.H,a.front),B=normSkeleton(b.pts,b.W,b.H,b.front);if(!A||!B)return '';
+  const W=300,H=560,sc=350,ox=150,oy=530,tx=p=>[ox+p[0]*sc,oy-p[1]*sc];const chain=['finger','wrist','elbow','shoulder','hip','knee','ankle'];
+  const poly=(P,col,w,dash)=>'<polyline fill="none" stroke="'+col+'" stroke-width="'+w+'" stroke-linejoin="round" stroke-linecap="round"'+(dash?' stroke-dasharray="'+dash+'"':'')+' points="'+chain.filter(k=>P[k]).map(k=>tx(P[k]).join(',')).join(' ')+'"/>'+chain.filter(k=>P[k]).map(k=>{const q=tx(P[k]);return '<circle cx="'+q[0]+'" cy="'+q[1]+'" r="3.5" fill="'+col+'"/>'}).join('')+(P.ear?'<circle cx="'+tx(P.ear)[0]+'" cy="'+tx(P.ear)[1]+'" r="9" fill="none" stroke="'+col+'" stroke-width="'+w+'"'+(dash?' stroke-dasharray="'+dash+'"':'')+'/>':'');
+  return '<svg class="chart" style="max-width:230px;margin:0 auto" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="두 기록의 관절선 겹쳐 보기"><line x1="'+ox+'" x2="'+ox+'" y1="10" y2="'+oy+'" stroke="var(--line)" stroke-width="1" stroke-dasharray="4 4"/>'+
+   '<text x="'+(W-8)+'" y="20" text-anchor="end" font-size="11" fill="var(--muted)">앞 →</text>'+poly(A,'var(--muted)',2.5,'5 4')+poly(B,'var(--accent)',3)+
+   '<line x1="14" x2="40" y1="'+(H-8)+'" y2="'+(H-8)+'" stroke="var(--muted)" stroke-width="2.5" stroke-dasharray="5 4"/><text x="46" y="'+(H-4)+'" font-size="11" fill="var(--muted)">이전</text><line x1="92" x2="118" y1="'+(H-8)+'" y2="'+(H-8)+'" stroke="var(--accent)" stroke-width="3"/><text x="124" y="'+(H-4)+'" font-size="11" fill="var(--ink)">이후</text></svg>'}
+function viewHistory(){const list=recs();if(!S.cmpB||!list.find(r=>r.id===S.cmpB))S.cmpB=list[list.length-1].id;if(!S.cmpA||!list.find(r=>r.id===S.cmpA))S.cmpA=list[Math.max(0,list.length-2)].id;
+  const a=list.find(r=>r.id===S.cmpA),b=list.find(r=>r.id===S.cmpB),ma=M(a),mb=M(b);const opt=sel=>list.map(r=>'<option value="'+r.id+'"'+(r.id===sel?' selected':'')+'>'+esc(r.date)+(r.note?' · '+esc(r.note.slice(0,18)):'')+'</option>').join('');
+  let better=0,worse=0;const rows=METRICS.map(x=>{const va=ma[x.k],vb=mb[x.k],v=verdict(x.k,va,vb);if(v===-1)better++;if(v===1)worse++;
+    return '<tr><td><b>'+x.n+'</b></td><td class="v">'+(va==null?'–':sgn(x.k,va)+x.u)+'</td><td class="v">'+(vb==null?'–':sgn(x.k,vb)+x.u)+'</td><td class="s">'+(v==null?'<span class="pill n">비교 불가</span>':v===0?'<span class="pill n">오차 범위</span>':v<0?'<span class="pill g">좋아짐</span>':'<span class="pill b">나빠짐</span>')+'</td></tr>'}).join('');
+  return (isEx()?'<div class="banner">아직 저장한 기록이 없어 예시 2건을 보여 드립니다. 첫 기록을 저장하면 예시는 사라집니다.</div>':'')+
+  '<div class="card"><div class="row"><h2>추이</h2><div class="field" style="max-width:230px;margin-left:auto"><label for="trendSel">지표</label><select id="trendSel">'+METRICS.map(x=>'<option value="'+x.k+'"'+(x.k===S.trend?' selected':'')+'>'+x.n+'</option>').join('')+'</select></div></div>'+trendSVG(list,S.trend)+'<p class="small muted">'+esc(MDEF[S.trend].d)+'.</p></div>'+
+  '<div class="card"><h2>두 기록 비교</h2><div class="row"><div class="field"><label for="cmpA">이전</label><select id="cmpA">'+opt(a.id)+'</select></div><div class="field"><label for="cmpB">이후</label><select id="cmpB">'+opt(b.id)+'</select></div></div>'+
+   (a.id===b.id?'<div class="banner warn">같은 기록입니다. 비교하려면 서로 다른 날짜를 고르세요.</div>':'<div class="banner">'+(better||worse?'좋아진 지표 <b>'+better+'</b>개, 나빠진 지표 <b>'+worse+'</b>개. 나머지는 마킹 오차 범위 안입니다.':'모든 지표의 변화가 마킹 오차 범위 안입니다. 달라졌다고 보기 어렵습니다.')+'</div>')+
+   '<div class="pair"><div id="shotA" data-shot="'+a.id+'" data-tag="이전 '+esc(a.date)+'">'+shotHTML(a,S.photos.get(a.id)||a.photo,'이전 '+a.date)+'</div><div id="shotB" data-shot="'+b.id+'" data-tag="이후 '+esc(b.date)+'">'+shotHTML(b,S.photos.get(b.id)||b.photo,'이후 '+b.date)+'</div></div>'+
+   '<h3>관절선 겹쳐 보기</h3><p class="small muted">복사뼈를 맞추고 다리를 수직으로 세운 뒤 몸 길이를 같게 맞춘 것입니다. 촬영 거리와 사진 기울기 차이는 사라지고 자세 차이만 남습니다.</p>'+skeletonSVG(a,b)+
+   '<div class="tscroll"><table class="mt"><tr><th>지표</th><th style="text-align:right">이전</th><th style="text-align:right">이후</th><th style="text-align:right">변화</th></tr>'+rows+'</table></div></div>'+
+  '<div class="card"><h2>기록 '+list.length+'건</h2><div class="recs">'+list.slice().reverse().map(r=>{const m=M(r);return '<div class="rec"><div data-shot="'+r.id+'" data-tiny="1">'+shotHTML(r,S.photos.get(r.id)||r.photo,'',true)+'</div><div><div class="row"><b class="num">'+esc(r.date)+'</b>'+(m.ok?'<span class="num">'+f1(m.line)+'%</span>'+pillHTML('line',m.line):'')+'</div><div class="small muted">'+esc(r.note||'메모 없음')+'</div>'+
+    (r.ex?'':'<div class="row" style="margin-top:6px"><button class="btn sm" type="button" data-edit="'+r.id+'">마커 수정</button><button class="btn sm" type="button" data-plan="'+r.id+'">추천 보기</button>'+(S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button><button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>')+'</div>')+'</div></div>'}).join('')+'</div></div>'}
+async function fillShots(){const list=recs();for(const el of document.querySelectorAll('[data-shot]')){const r=list.find(x=>x.id===el.dataset.shot);if(!r||r.ex||el.querySelector('img'))continue;const p=await Store.photo(r);if(p&&el.isConnected&&!el.querySelector('img'))el.innerHTML=shotHTML(r,p,el.dataset.tag||'',!!el.dataset.tiny)}}
+
+/* ===== 운동 추천 화면 ===== */
+const TESTS=[
+ {k:'wall',n:'벽에서 팔 올리기',how:'벽에 등을 대고 서서 발뒤꿈치를 벽에서 한 발 길이만큼 앞에 둡니다. 허리·갈비·뒤통수를 벽에 붙인 채, 팔꿈치를 펴고 엄지를 위로 해서 양팔을 머리 위로 올립니다.',o:[['pass','허리를 붙인 채 엄지가 벽에 닿는다'],['arch','허리나 갈비가 벽에서 떠야 닿는다'],['fail','허리가 떠도 닿지 않는다']]},
+ {k:'supine',n:'누워서 무릎 세우고 팔 올리기',how:'바닥에 누워 무릎을 세우고 허리를 바닥에 붙입니다. 팔꿈치를 펴고 양팔을 귀 옆에 붙이며 머리 위 바닥으로 내립니다.',o:[['pass','허리를 붙인 채 팔이 바닥에 닿는다'],['arch','허리가 뜨거나 팔꿈치가 벌어져야 닿는다'],['fail','닿지 않는다']]},
+ {k:'trot',n:'네발기기 윗등 회전',how:'무릎을 꿇고 엉덩이를 발뒤꿈치에 붙여 앉습니다. 한 손은 바닥, 반대 손은 뒤통수에 두고 그쪽 팔꿈치를 천장으로 돌립니다. 가슴이 바닥과 이루는 각이 절반(약 40~45°)을 넘는지 봅니다.',o:[['pass','양쪽 다 절반 이상 돌아간다'],['limited','양쪽 다 절반에 못 미친다'],['asym','한쪽만 덜 돌아간다']]},
+ {k:'elbow',n:'팔 앞으로 뻗어 팔꿈치 펴기',how:'스트림라인 손 모양 그대로 팔을 어깨 높이 앞으로 뻗습니다.',o:[['pass','완전히 펴진다'],['fail','앞에서도 다 펴지지 않는다']]}
+];
+function viewPlan(){const list=recs();if(!S.planRec||!list.find(r=>r.id===S.planRec))S.planRec=list[list.length-1].id;const r=list.find(x=>x.id===S.planRec),m=M(r);
+  let h=(isEx()?'<div class="banner">예시 기록으로 만든 추천입니다. 내 사진을 저장하면 내 수치로 바뀝니다.</div>':'')+
+  '<div class="card"><div class="row"><h2>어느 기록으로 볼까요</h2><div class="field" style="max-width:260px;margin-left:auto"><label for="planSel">기록</label><select id="planSel">'+list.map(x=>'<option value="'+x.id+'"'+(x.id===r.id?' selected':'')+'>'+esc(x.date)+(x.note?' · '+esc(x.note.slice(0,18)):'')+'</option>').join('')+'</select></div></div>'+
+  '<h3>감별 테스트 (선택)</h3><p class="small muted">사진만으로는 원인을 가릴 수 없습니다. 아래 결과를 입력하면 추천이 좁혀집니다. 한 번 입력하면 저장됩니다.</p>'+
+  TESTS.map(t=>'<details'+(S.tests[t.k]?'':' open')+'><summary>'+t.n+(S.tests[t.k]?' <span class="pill g">입력됨</span>':' <span class="pill n">미입력</span>')+'</summary><p class="small">'+t.how+'</p><div class="field"><label for="t_'+t.k+'">결과</label><select id="t_'+t.k+'" data-test="'+t.k+'"><option value="">아직 안 해 봄</option>'+t.o.map(o=>'<option value="'+o[0]+'"'+(S.tests[t.k]===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></div></details>').join('')+'</div>';
+  if(!m.ok)return h+'<div class="card"><div class="banner warn">이 기록은 필수 점이 모자라 추천을 만들 수 없습니다.</div></div>';
+  const rec=recommend(m,S.tests);
+  h+='<div class="card"><h2>현재 자세에서 읽히는 것</h2>'+rec.findings.map(f=>'<div class="finding l'+f.level+'"><h3>'+f.title+'</h3>'+(f.ev.length?'<div class="row">'+f.ev.map(e=>'<span class="pill n num">'+esc(e)+'</span>').join('')+'</div>':'')+'<p>'+f.text+'</p></div>').join('')+'</div>';
+  h+='<div class="card"><h2>추천 동작 '+rec.routine.length+'가지</h2><p class="small muted">위에서부터 우선순위 순입니다. 수영 전 준비운동이나 쉬는 날에 주 3~4회, 전체 10분 안팎입니다.</p>'+
+   rec.routine.map((x,i)=>{const e=EX[x.id];return '<div class="ex"><div class="row"><span class="no">'+(i+1)+'</span><h3>'+e.n+'</h3><span class="pill n">'+e.t+'</span></div><div class="why"><b>왜 이 동작인가</b> '+esc(x.why)+' '+e.mech+'</div><ol>'+e.how.map(s=>'<li>'+s+'</li>').join('')+'</ol><div class="small"><b>분량</b> '+e.dose+'</div></div>'}).join('')+
+   '<p class="small muted">2~4주 뒤 같은 조건으로 다시 찍어 기록·비교 화면에서 수치가 오차 범위를 넘어 움직였는지 확인하세요. 움직이지 않으면 원인 추정이 틀렸을 수 있으니 감별 테스트를 다시 해 봅니다.</p>'+
+   '<p class="small muted">이 추천은 사진 한 장과 자가 테스트에 근거한 추정이며 의학적 진단이 아닙니다. 동작 중 통증이나 저림이 있으면 중단하고 전문가에게 확인하세요.</p></div>';
+  return h}
+
+/* ===== 방법 화면 ===== */
+function viewGuide(){return '<div class="card"><h2>촬영 조건</h2><div class="prose"><p>수치를 날짜끼리 비교하려면 매번 같은 조건이어야 합니다. 조건이 바뀌면 자세가 아니라 사진이 달라진 것입니다.</p><ul>'+
+ '<li><b>방향</b> 정확히 옆모습. 가슴이나 등이 조금이라도 보이면 각도가 실제보다 작게 나옵니다. 매번 같은 쪽(예: 항상 왼쪽 옆).</li>'+
+ '<li><b>카메라 높이</b> 허리~배꼽 높이에 고정. 눈높이에서 내려 찍으면 위아래가 왜곡됩니다.</li>'+
+ '<li><b>거리</b> 3~4m. 손끝부터 발까지 여유 있게 들어오게 합니다. 0.5배 광각은 쓰지 않습니다.</li>'+
+ '<li><b>수평</b> 폰을 세워 고정하고 기울지 않게 합니다. 바닥선이나 벽 모서리가 화면과 평행한지 확인합니다.</li>'+
+ '<li><b>자세</b> 맨발, 발바닥 전체를 바닥에. 가장 좋은 스트림라인을 3초 유지한 상태에서 찍습니다. 타이머나 영상 캡처가 편합니다.</li>'+
+ '<li><b>옷</b> 몸선이 보이는 수영복이나 딱 붙는 옷. 허리와 갈비 윤곽이 보여야 선택 4점을 찍을 수 있습니다.</li></ul></div></div>'+
+ '<div class="card"><h2>점 12개의 위치</h2><div class="tscroll"><table class="mt"><tr><th>점</th><th>위치</th><th>구분</th></tr>'+PTS.map(p=>'<tr><td><b>'+p.n+'</b></td><td>'+p.hint+'</td><td>'+(p.opt?'<span class="pill n">선택</span>':'<span class="pill g">필수</span>')+'</td></tr>').join('')+'</table></div><p class="small muted">옷이나 팔에 가려진 점은 뼈 위치를 짐작해 찍습니다. 중요한 것은 매번 같은 기준으로 찍는 것입니다.</p></div>'+
+ '<div class="card"><h2>지표와 판정 기준</h2><div class="tscroll"><table class="mt"><tr><th>지표</th><th style="text-align:right">양호</th><th style="text-align:right">주의</th><th style="text-align:right">오차로 보는 변화</th></tr>'+METRICS.map(x=>'<tr><td><b>'+x.n+'</b><div class="small muted">'+x.d+'</div></td><td class="v">'+(x.th?'≤ '+x.th[0]+x.u:'–')+'</td><td class="v">'+(x.th?'≤ '+x.th[1]+x.u:'–')+'</td><td class="v">&lt; '+x.noise+x.u+'</td></tr>').join('')+'</table></div>'+
+ '<div class="prose"><p><b>한계</b></p><ul><li>판정 기준은 이 앱에서 정한 잠정값입니다. 수영 선수 집단에서 검증된 규준이 아닙니다.</li><li>손으로 찍는 점은 1~2cm 어긋날 수 있고, 각도로는 2~3°에 해당합니다. 그보다 작은 변화는 변화로 치지 않습니다.</li><li>지상에서 선 자세는 물속 자세와 다릅니다. 물속에서는 부력과 호흡, 킥이 더해집니다. 지상 수치는 쓸 수 있는 가동범위와 자세 습관을 보는 용도입니다.</li><li>어깨 굴곡 부족은 몸통선 기준이라, 허리를 꺾으면 실제보다 좋게 나옵니다. 허리 아치를 함께 봐야 합니다.</li></ul></div></div>'+
+ '<div class="card"><h2>근거로 삼은 자료</h2><div class="prose"><ul>'+
+ '<li><a href="https://www.jstage.jst.go.jp/article/swex/22/1/22_1/_article/-char/en">지상 스트림라인의 척추 정렬과 견인 수동 항력</a> — 윗등 굽이 각과 항력계수의 상관. 일본수영수중운동학회지 22(1).</li>'+
+ '<li><a href="https://coachsci.sdsu.edu/swim/hydros/chatard2.htm">Chatard 외(1990)</a> — 어깨 유연성이 큰 선수의 수동 항력이 작았다는 보고 요약.</li>'+
+ '<li><a href="https://doi.org/10.4102/sajp.v74i1.388">Dawood 외(2018)</a> — 광배근 길이 검사의 신뢰도. 광배근이 짧으면 허리 전만이 커진다는 설명 포함.</li>'+
+ '<li><a href="https://doi.org/10.1002/tsm2.109">Heneghan 외(2019)</a> — 양팔을 올릴 때 윗등이 12~13° 펴진다는 체계적 문헌고찰.</li>'+
+ '<li><a href="https://simplifaster.com/?p=5860">윗등·상지 가동성 검사 정리</a> — 허리 고정 회전 검사의 참고 범위(약 40°).</li></ul></div></div>'}
+
+/* ===== 그리기와 이벤트 ===== */
+function whereUI(){const w=$('#where'),m=Store.mode;const t={checking:['','저장 위치 확인 중'],slow:['local','계정 저장에 연결하지 못했습니다. 지금은 이 브라우저에 저장합니다'],cloud:['cloud','계정에 저장 · 폰과 컴퓨터에서 같은 기록'],local:['local','이 브라우저에만 저장']}[m];w.innerHTML='<span class="dot '+t[0]+'"></span><span>'+t[1]+'</span>'}
+function render(){const v=S.view;document.querySelectorAll('nav.tabs a').forEach(a=>{if(a.dataset.v===v)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current')});
+  $('#main').innerHTML=v==='history'?viewHistory():v==='plan'?viewPlan():v==='guide'?viewGuide():viewMeasure();whereUI();
+  if(v==='measure'){bindStage();if(S.draft&&!S.draft.target)S.draft.target=nextTarget(S.draft);updateStage()}
+  if(v==='history')fillShots()}
+function refresh(){whereUI();if(S.view!=='measure')render()}
+function route(){const h=(location.hash||'').replace('#','');S.view=['measure','history','plan','guide'].includes(h)?h:'measure';S.delAsk=null;render();window.scrollTo(0,0)}
+window.addEventListener('hashchange',route);
+document.addEventListener('click',async e=>{const t=e.target.closest('[data-pt],[data-front],[data-clear],[data-edit],[data-plan],[data-del],[data-del2],[data-delno],#saveBtn');if(!t)return;const d=S.draft;
+  if(t.dataset.pt){d.target=t.dataset.pt;updateStage()}
+  else if(t.dataset.front){d.front=t.dataset.front;document.querySelectorAll('[data-front]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.front===d.front));updateStage()}
+  else if(t.dataset.clear){delete d.pts[t.dataset.clear];updateStage()}
+  else if(t.dataset.edit){const r=S.recs.find(x=>x.id===t.dataset.edit);if(!r)return;const p=await Store.photo(r);if(!p){toast('이 기록은 사진이 저장되지 않아 마커를 고칠 수 없습니다.');return}S.draft={id:r.id,date:r.date,note:r.note||'',front:r.front,W:r.W,H:r.H,photo:p,pts:JSON.parse(JSON.stringify(r.pts)),target:null,created:r.created};location.hash='#measure';if(S.view==='measure')render()}
+  else if(t.dataset.plan){S.planRec=t.dataset.plan;location.hash='#plan'}
+  else if(t.dataset.del){S.delAsk=t.dataset.del;render()}
+  else if(t.dataset.delno){S.delAsk=null;render()}
+  else if(t.dataset.del2){S.delAsk=null;await Store.remove(t.dataset.del2);render();toast('기록을 삭제했습니다.')}
+  else if(t.id==='saveBtn'){const m=computeMetrics(d.pts,d.W,d.H,d.front);if(!m.ok||d.ex)return;t.disabled=true;
+    const rec={id:d.id||('rec_'+Date.now().toString(36)),date:d.date||today(),note:(d.note||'').slice(0,80),front:d.front,W:d.W,H:d.H,pts:d.pts,hasPhoto:true,created:d.created||Date.now(),v:1};
+    const res=await Store.save(rec,d.photo);
+    if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}
+    if(Store.mode!=='cloud'||res==='local'){if(!S.recs.find(x=>x.id===rec.id))S.recs=LS.get('sl_recs',S.recs)}
+    else if(!S.recs.find(x=>x.id===rec.id))S.recs=S.recs.concat([rec]);else S.recs=S.recs.map(x=>x.id===rec.id?rec:x);
+    toast(res==='cloud'?'계정에 저장했습니다.':res==='nophoto'?'수치와 마커만 저장했습니다. 사진은 용량 때문에 저장하지 못했습니다.':'이 브라우저에 저장했습니다.');
+    S.draft=null;S.cmpA=S.cmpB=null;S.planRec=rec.id;location.hash='#history';if(S.view==='history')render()}
+});
+document.addEventListener('change',async e=>{const t=e.target;
+  if(t.id==='file'&&t.files&&t.files[0]){try{const p=await fileToPhoto(t.files[0]);const prev=S.draft||{};S.draft={id:null,date:today(),note:'',front:prev.ex?null:(prev.front||null),W:p.W,H:p.H,photo:p.d,pts:{},target:'finger'};if(!S.draft.front){const last=recs().filter(r=>!r.ex).pop();S.draft.front=last?last.front:null}render()}catch(x){toast('이 파일은 사진으로 열 수 없습니다. JPG나 PNG로 다시 선택해 주세요.')}}
+  else if(t.id==='dDate')S.draft.date=t.value;
+  else if(t.id==='trendSel'){S.trend=t.value;render()}
+  else if(t.id==='cmpA'){S.cmpA=t.value;render()}
+  else if(t.id==='cmpB'){S.cmpB=t.value;render()}
+  else if(t.id==='planSel'){S.planRec=t.value;render()}
+  else if(t.dataset.test){const nt=Object.assign({},S.tests);if(t.value)nt[t.dataset.test]=t.value;else delete nt[t.dataset.test];await Store.saveTests(nt);render()}
+});
+document.addEventListener('input',e=>{if(e.target.id==='dNote'&&S.draft)S.draft.note=e.target.value});
+document.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('label[for="file"]')){e.preventDefault();$('#file').click()}});
+route();Store.init();
+</script>
+</body>
+</html>
