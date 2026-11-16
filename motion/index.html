@@ -147,7 +147,7 @@ function sg(y,k,dt){const n=y.length,s=new Array(n),d=new Array(n);
     s[i]=(T0*(S2*S4-S3*S3)-S1*(T1*S4-S3*T2)+S2*(T1*S3-S2*T2))/det;
     d[i]=(S0*(T1*S4-T2*S3)-T0*(S1*S4-S3*S2)+S2*(S1*T2-S2*T1))/det/dt}
   return {s,d}}
-function kinematics(X,Y,fs){const dt=1/fs,k=Math.max(2,Math.round(.06*fs)),sx=sg(X,k,dt),sy=sg(Y,k,dt),ay=sg(sy.d,k,dt).d;
+function kinematics(X,Y,fs,win){const dt=1/fs,k=Math.max(2,Math.round((win||.06)*fs)),sx=sg(X,k,dt),sy=sg(Y,k,dt),ay=sg(sy.d,k,dt).d;
   return {k,X:sx.s,Y:sy.s,vx:sx.d,vy:sy.d,ay,sp:sx.d.map((v,i)=>Math.hypot(v,sy.d[i])),t:X.map((_,i)=>i*dt)}}
 /* 속도가 문턱을 넘는 연속 구간을 상승(+1)/하강(-1)으로 나눔 */
 function phases(t,vy,Y,thr,minDur,minDy){thr=thr||.08;minDur=minDur||.12;minDy=minDy||.05;const out=[],n=vy.length;let i=0;
@@ -166,7 +166,7 @@ function summarize(K,mass,conf){const n=K.t.length,e=n>4*K.k+4?K.k:0;let iv=e,is
     pPeak:P?P[ip]:null,pSimple:mass?mass*G*K.vy[iv]:null,dur:K.t[n-1],conf:cm,low}}}
 function angleDeg(ax,ay,bx,by,cx,cy){const ux=ax-bx,uy=ay-by,vx=cx-bx,vy=cy-by,d=(ux*vx+uy*vy)/((Math.hypot(ux,uy)*Math.hypot(vx,vy))||1);return Math.acos(Math.max(-1,Math.min(1,d)))*180/Math.PI}
 /* 관절 각도: 세 점을 같은 시간축에 맞추고 가볍게 평활한 뒤 가운데 점에서의 각을 구함. 길이 환산이 필요 없음 */
-function angleSeries(tr,defs,slow,fs){const T=tr.t.map(v=>(v-tr.t[0])/slow),k=Math.max(2,Math.round(.06*fs)),cache={};
+function angleSeries(tr,defs,slow,fs,win){const T=tr.t.map(v=>(v-tr.t[0])/slow),k=Math.max(2,Math.round((win||.06)*fs)),cache={};
   const get=key=>{if(!cache[key]){const p=key==='main'?tr:(tr.P&&tr.P[key]);if(!p||p.x.length<tr.t.length)return null;cache[key]={x:sg(resample(T,p.x,fs),k,1).s,y:sg(resample(T,p.y,fs),k,1).s,c:resample(T,p.c,fs)}}return cache[key]};
   return defs.map(d=>{const a=get(d.pts[0]),b=get(d.pts[1]),c=get(d.pts[2]);if(!a||!b||!c)return null;const out=a.x.map((_,i)=>angleDeg(a.x[i],a.y[i],b.x[i],b.y[i],c.x[i],c.y[i]));let mn=0,mx=0,low=0;
     for(let i=0;i<out.length;i++){if(out[i]<out[mn])mn=i;if(out[i]>out[mx])mx=i;if(Math.min(a.c[i],b.c[i],c.c[i])<.5)low++}
@@ -176,10 +176,70 @@ function analyze(tr,o){const n=tr.t.length;if(n<6)return null;const T=tr.t.map(v
   /* 계산 간격은 분석 간격×슬로모션 배율(실제 시간 기준). 중복 프레임을 건너뛰어 표본이 비어도 간격은 유지 */
   const fs=Math.round(Math.min(240,Math.max(10,o.rate?o.rate*o.slow:(n-1)/dur)));
   const X=resample(T,tr.x.map(v=>(v-tr.x[0])/o.pxPerM),fs),Y=resample(T,tr.y.map(v=>-(v-tr.y[0])/o.pxPerM),fs),C=resample(T,tr.c,fs);
-  const K=kinematics(X,Y,fs),S=summarize(K,o.mass,C),ang=o.angles&&o.angles.length?angleSeries(tr,o.angles,o.slow,fs):[];
+  const K=kinematics(X,Y,fs,o.win),S=summarize(K,o.mass,C),ang=o.angles&&o.angles.length?angleSeries(tr,o.angles,o.slow,fs,o.win):[];
   ang.forEach(a=>{a.atPeak=a.a[Math.min(a.a.length-1,Math.round(S.sum.tPeak*fs))]});return Object.assign({fs,conf:C,angles:ang},K,S)}
 /* 저장된 기록(X,Y,fs)에서 다시 계산 */
-function fromRecord(r){const K=kinematics(r.X,r.Y,r.fs),S=summarize(K,r.mass,null);return Object.assign({fs:r.fs,angles:[]},K,S)}
+function fromRecord(r){const K=kinematics(r.X,r.Y,r.fs,r.win),S=summarize(K,r.mass,null);return Object.assign({fs:r.fs,angles:[]},K,S)}
+
+/* ===== 종목별 분석 ===== */
+function median(a){const b=a.slice().sort((x,y)=>x-y),n=b.length;return n?(n%2?b[(n-1)/2]:(b[n/2-1]+b[n/2])/2):0}
+/* 풀업: 올라가는 구간 하나가 한 번. 가장 큰 상승의 50% 이상만 반복으로 세고, 90% 미만은 '짧은 반복'으로 표시 */
+function pullupReport(r,o){o=o||{};const ups=r.phases.filter(p=>p.dir>0);if(!ups.length)return {reps:[],sum:null};
+  const mx=Math.max.apply(null,ups.map(p=>p.dy)),list=ups.filter(p=>p.dy>=.5*mx),elb=r.angles.find(a=>a.n==='팔꿈치'),m=o.mass||0;
+  const ext=list.map(p=>{let a=p.i0,b=p.i1;while(a>0&&r.vy[a-1]>.01)a--;while(b<r.vy.length-1&&r.vy[b+1]>.01)b++;const dy=r.Y[b]-r.Y[a],T=r.t[b]-r.t[a];return Object.assign({},p,{i0:a,i1:b,t0:r.t[a],t1:r.t[b],dy,mean:dy/T})});
+  list.splice(0,list.length,...ext);
+  const reps=list.map((p,i)=>{const T=p.t1-p.t0,prevEnd=i?list[i-1].i1:0;let top=p.i1;for(let q=p.i0;q<=Math.min(r.Y.length-1,p.i1+Math.round(.25*r.fs));q++)if(r.Y[q]>r.Y[top])top=q;
+    const dn=r.phases.find(q=>q.dir<0&&q.t0>=p.t1-1e-9&&(i+1>=list.length||q.t0<list[i+1].t0));
+    let pp=null;if(r.P&&m){pp=-1e9;for(let q=p.i0;q<=p.i1;q++)pp=Math.max(pp,r.P[q])}
+    let bottom=null;if(elb){bottom=0;for(let q=prevEnd;q<=p.i0;q++)bottom=Math.max(bottom,elb.a[q])}
+    return {i:i+1,t0:p.t0,rom:p.dy,T,mean:p.mean,peak:p.peak,pMean:m?m*G*p.dy/T:null,pPeak:pp,ecc:dn?dn.t1-dn.t0:null,margin:o.barY!=null?r.Y[top]-o.barY:null,elbow:bottom,short:p.dy<.9*mx}});
+  const best=reps.reduce((a,b)=>b.mean>a.mean?b:a,reps[0]),last=reps[reps.length-1];
+  return {reps,sum:{n:reps.length,short:reps.filter(q=>q.short).length,best:best.mean,bestI:best.i,first:reps[0].mean,last:last.mean,loss:reps.length>1?(1-last.mean/best.mean)*100:null,
+    rom:reps.reduce((a,b)=>a+b.rom,0)/reps.length,pMean:best.pMean,chinOk:o.barY!=null?reps.filter(q=>q.margin>0).length:null}}}
+/* 발끝이 바닥에서 떨어진 시각(이륙)과 다시 닿은 시각(착지). 1.5cm·3cm를 지나는 시각으로 바닥(0cm)에 닿는 시각을 거꾸로 추정 */
+function flightFromToe(toe,tLow,tAp,th){th=th||.015;const t=toe.t,z=toe.rise,n=t.length;
+  const cross=(j,lv)=>{const a=z[j-1],b=z[j];return t[j-1]+(lv-a)/((b-a)||1e-9)*(t[j]-t[j-1])};
+  let j=-1;for(let i=1;i<n;i++)if(t[i]>=tLow&&z[i]>=th&&z[i-1]<th){j=i;break}
+  if(j<0||t[j]>tAp+.05)return null;
+  let j2=j;while(j2<n&&z[j2]<2*th)j2++;
+  const a1=cross(j,th),a2=j2<n?cross(j2,2*th):a1;let lastLow=j-1;while(lastLow>0&&z[lastLow]>th/3)lastLow--;
+  const to=Math.max(t[lastLow],a1-(a2-a1));
+  let k=-1;for(let i=j+1;i<n;i++)if(t[i]>tAp-.02&&z[i]<th&&z[i-1]>=th){k=i;break}
+  if(k<0)return {to,ld:null};
+  let k2=k-1;while(k2>j&&z[k2]<2*th)k2--;
+  const b1=cross(k,th),b2=z[k2]>=2*th&&k2+1<k?cross(k2+1,2*th):b1;let firstLow=k;while(firstLow<n-1&&z[firstLow]>th/3)firstLow++;
+  return {to,ld:Math.min(t[firstLow],b1+(b1-b2))}}
+/* 발끝 바로 위 얇은 띠를 선 자세 화면과 비교한 차이(v). 신발이 떠나면 커지고 돌아오면 작아짐.
+   변화 폭의 30%·60%를 지나는 시각으로 0%(신발이 막 떠나거나 닿은 순간)를 거꾸로 추정 */
+function flightFromDiff(sig,tLow,tAp){const t=sig.t,v=sig.v,n=t.length;if(n<5)return null;const b0=median(v.filter((_,i)=>t[i]<.25).concat(v.slice(0,2)));
+  let pk=-1;for(let i=0;i<n;i++)if(t[i]>=tLow&&(pk<0||v[i]>v[pk]))pk=i;if(pk<0)return null;const P=v[pk];if(P-b0<6)return null;
+  const L=f=>b0+f*(P-b0),cr=(j,lv)=>t[j-1]+(lv-v[j-1])/((v[j]-v[j-1])||1e-9)*(t[j]-t[j-1]);
+  let j=-1;for(let i=1;i<=pk;i++)if(t[i]>=tLow&&v[i]>=L(.3)&&v[i-1]<L(.3)){j=i;break}if(j<0||t[j]>tAp+.05)return null;
+  let j2=j;while(j2<n&&v[j2]<L(.6))j2++;const a1=cr(j,L(.3)),a2=j2<n&&j2>0?cr(j2,L(.6)):a1;let lo=j-1;while(lo>0&&v[lo]>L(.1))lo--;
+  const to=Math.max(t[lo],a1-(a2-a1));
+  let k=-1;for(let i=pk+1;i<n;i++)if(v[i]<L(.3)&&v[i-1]>=L(.3)){k=i;break}if(k<0)return {to,ld:null};
+  let k2=k-1;while(k2>pk&&v[k2]<L(.6))k2--;const b1=cr(k,L(.3)),b2=v[k2]>=L(.6)&&k2+1<k?cr(k2+1,L(.6)):b1;let hi=k;while(hi<n-1&&v[hi]>L(.1))hi++;
+  return {to,ld:Math.min(t[hi],b1+(b1-b2))}}
+/* CMJ: 골반(몸 중심 대용)으로 반동·추진을 나누고, 발끝(또는 직접 지정)으로 체공 시간을 잼. 시간은 분석 시작 = 0 인 실제 초 */
+function cmjReport(r,o){o=o||{};const n=r.t.length,fs=r.fs;if(n<10)return null;
+  const i0=Math.min(n-1,Math.round(.25*fs)),base=median(r.Y.slice(0,i0+1)),still=Math.max.apply(null,r.vy.slice(0,i0+1).map(Math.abs))<.15;
+  let ap=0;for(let i=0;i<n;i++)if(r.Y[i]>r.Y[ap])ap=i;
+  let lo=0;for(let i=0;i<=ap;i++)if(r.Y[i]<r.Y[lo])lo=i;
+  let vd=0;for(let i=0;i<=lo;i++)if(r.vy[i]<r.vy[vd])vd=i;
+  let on=vd;while(on>0&&r.vy[on-1]<-.05)on--;
+  let vu=lo;for(let i=lo;i<=ap;i++)if(r.vy[i]>r.vy[vu])vu=i;
+  let to=null,ld=null,src=null;
+  if(o.manual&&o.manual.ld>o.manual.to){to=o.manual.to;ld=o.manual.ld;src='manual'}
+  else if(o.foot||o.toe){const f=(o.foot?flightFromDiff(o.foot,r.t[lo],r.t[ap]):null)||(o.toe?flightFromToe(o.toe,r.t[lo],r.t[ap]):null);if(f){to=f.to;ld=f.ld;src='toe'}}
+  const at=(a,t)=>{const x=Math.max(0,Math.min(n-1,t*fs)),i=Math.floor(x),f=x-i;return i>=n-1?a[n-1]:a[i]*(1-f)+a[i+1]*f};
+  const T=to!=null&&ld!=null?ld-to:null,hFlight=T!=null?G*T*T/8:null,vTo=to!=null?at(r.vy,to):r.vy[vu],hVel=vTo>0?vTo*vTo/(2*G):null;
+  const iTo=to!=null?Math.max(lo,Math.min(n-1,Math.round(to*fs))):vu,m=o.mass||0;
+  let pp=null;if(r.P&&m){pp=-1e9;for(let i=lo;i<=iTo;i++)pp=Math.max(pp,r.P[i])}
+  const knee=r.angles.find(a=>a.n==='무릎');let kmin=null;if(knee){kmin=999;for(let i=on;i<=iTo;i++)kmin=Math.min(kmin,knee.a[i])}
+  const h=hFlight!=null?hFlight:hVel,ttt=to!=null?to-r.t[on]:null;
+  return {base,still,depth:base-r.Y[lo],hFlight,hVel,hDisp:r.Y[ap]-base,h,hSrc:hFlight!=null?src:'vel',T,to,ld,src,vTo,vDown:r.vy[vd],tOn:r.t[on],tLow:r.t[lo],
+    ecc:r.t[lo]-r.t[on],con:(to!=null?to:r.t[vu])-r.t[lo],ttt,rsi:ttt&&hFlight!=null?hFlight/ttt:null,pp,sayers:m&&h?60.7*h*100+45.3*m-2055:null,knee:kmin,
+    err:T!=null&&o.dtFrame?G*T/4*o.dtFrame:null,iOn:on,iLow:lo,iAp:ap}}
 </script>
 
 <script>
@@ -189,13 +249,27 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
 const f2=v=>v==null?'–':v.toFixed(2),f1=v=>v==null?'–':v.toFixed(1),f0=v=>v==null?'–':String(Math.round(v));
 const vid=document.getElementById('vid'),wk=document.createElement('canvas');let wctx=null;
-const V={has:false,dur:0,cw:405,ch:720,cur:0,t0:0,t1:0,slow:1,rate:30,name:'',mass:'',cal:{a:null,b:null,cm:45},target:null,half:16,track:null,res:null,mode:null,busy:false,abort:false,playing:false,chart:'vy',tmp:null,prog:'',preset:'one',extra:{},tIdx:0,fixK:'main'};
+const V={has:false,dur:0,cw:405,ch:720,cur:0,t0:0,t1:0,slow:1,rate:60,name:'',mass:'',cal:{a:null,b:null,cm:45},target:null,half:16,track:null,res:null,mode:null,busy:false,abort:false,playing:false,chart:'vy',tmp:null,prog:'',preset:'pu1',extra:{},tIdx:0,fixK:'main',sport:'pullup',body:'',bar:null,man:{},rep:null};
 /* 추적 구성: 주 추적점 하나는 항상 있고, 각도용 점을 더할 수 있음 */
-const PRESET={one:{n:'한 점 (궤적·속도)',pts:[],ang:[],bones:[]},
+const SPORT={pullup:{n:'중량 풀업',main:'턱',presets:['pu1','pu2'],cm:45,rate:60,massL:'추가 중량(kg)',
+   cal:'벨트에 단 원판의 지름을 찍습니다(범퍼·20kg 원판은 보통 45cm). 원판이 없으면 몸과 같은 거리에 세운, 길이를 아는 막대를 찍으세요.',
+   tgt:'턱 끝을 찍습니다. 손이나 바에 가려지지 않는 각도로 찍은 영상이 좋고, 턱 끝에 작은 스티커를 붙이면 훨씬 안정적으로 따라갑니다.'},
+ cmj:{n:'CMJ (반동 점프)',main:'골반',presets:['cm1','cm2','cm0'],cm:100,rate:120,massL:'추가 중량(kg, 조끼 등)',
+   cal:'몸과 같은 거리에 있는, 길이를 아는 두 점을 찍습니다. 몸 옆 벽이나 기둥에 100cm 간격으로 테이프를 붙여 두면 편합니다.',
+   tgt:'골반 옆(허리 벨트나 붙인 테이프)을 찍습니다. 몸 중심 대신 쓰는 점입니다.'},
+ free:{n:'기타 (바벨 등)',main:'주 추적점',presets:['one','hipknee','angle3'],cm:45,rate:60,massL:'무게(kg, 선택)',
+   cal:'길이를 아는 두 점을 찍습니다. 표준 원판 지름은 45cm입니다. 추적할 물체와 카메라에서 같은 거리에 있는 것이어야 합니다.',
+   tgt:'속도를 잴 물체에서 무늬나 경계가 뚜렷한 곳(바벨 끝, 원판 중심 등)을 찍습니다.'}};
+const PRESET={pu1:{n:'턱만 (속도·이동 거리·턱 넘김)',pts:[],ang:[],bones:[]},
+ pu2:{n:'턱 + 팔꿈치 각도 (끝까지 내려왔는지)',pts:[['shoulder','어깨'],['elbow','팔꿈치'],['wrist','손목']],ang:[{n:'팔꿈치',pts:['shoulder','elbow','wrist']}],bones:[['shoulder','elbow'],['elbow','wrist']]},
+ cm1:{n:'골반 + 발끝 (점프 높이)',pts:[['toe','발끝']],ang:[],bones:[]},
+ cm2:{n:'골반 + 무릎·발목·발끝 (높이 + 무릎 각도)',pts:[['knee','무릎'],['ankle','발목'],['toe','발끝']],ang:[{n:'무릎',pts:['main','knee','ankle']}],bones:[['main','knee'],['knee','ankle'],['ankle','toe']]},
+ cm0:{n:'골반만 (높이는 참고값)',pts:[],ang:[],bones:[]},
+ one:{n:'한 점 (궤적·속도)',pts:[],ang:[],bones:[]},
  hipknee:{n:'한 점 + 힙·무릎 각도',pts:[['shoulder','어깨'],['hip','골반'],['knee','무릎'],['ankle','발목']],ang:[{n:'힙',pts:['shoulder','hip','knee']},{n:'무릎',pts:['hip','knee','ankle']}],bones:[['shoulder','hip'],['hip','knee'],['knee','ankle']]},
  angle3:{n:'한 점 + 각도 1개 (세 점 직접 지정)',pts:[['a1','각도 점 1'],['a2','꼭짓점'],['a3','각도 점 3']],ang:[{n:'각도',pts:['a1','a2','a3']}],bones:[['a1','a2'],['a2','a3']]}};
-const ptList=()=>[['main','주 추적점']].concat(PRESET[V.preset].pts),ptPos=k=>k==='main'?V.target:(V.extra[k]||null),allSet=()=>ptList().every(p=>ptPos(p[0]));
-const S={recs:[],view:'analyze',sel:null,delAsk:null};
+const ptList=()=>[['main',SPORT[V.sport].main]].concat(PRESET[V.preset].pts),ptPos=k=>k==='main'?V.target:(V.extra[k]||null),allSet=()=>ptList().every(p=>ptPos(p[0]));
+const S={recs:[],view:'analyze',sel:null,delAsk:null,rsp:null};
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}}};
 let toastT;function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(toastT);toastT=setTimeout(()=>t.style.display='none',3800)}
 
@@ -225,9 +299,31 @@ function demoTrack(){const fs=60,n=Math.round(2.4*fs),t=[],x=[],y=[],c=[],sm=u=>
   for(let i=0;i<n;i++){const s=i/fs;let Y=1.05*sm((s-.1)/1.0)-.2*sm((s-1.0)/.35)+.8*sm((s-1.5)/.8);let X=-.06*sm((s-.15)/.45)+.11*sm((s-.5)/.5)-.03*sm((s-1.45)/.8);
     t.push(s);x.push(190+X*px);y.push(650-Y*px);c.push(1)}
   return {t,x,y,c}}
-function setDemo(){V.has=false;V.dur=2.38;V.cw=405;V.ch=720;V.t0=0;V.t1=2.38;V.cur=1.0;V.slow=1;V.track=demoTrack();V.cal={a:[190,650],b:[190,515],cm:45};V.target=null;V.res=analyze(V.track,{pxPerM:300,slow:1,mass:30,rate:60})}
+const smo=u=>u<=0?0:u>=1?1:u*u*u*(u*(6*u-15)+10);
+function demoPull(){const fs=60,px=300,R=[[.3,.75,.55],[2.0,.85,.53],[3.75,1.0,.50]],tr={t:[],x:[],y:[],c:[]};
+  for(let i=0;i<=5.8*fs;i++){const t=i/fs;let Y=0;R.forEach(([a,d,rom])=>{if(t>=a&&t<a+d)Y+=rom*smo((t-a)/d);else if(t>=a+d&&t<a+d+.25)Y+=rom;else if(t>=a+d+.25)Y+=rom*(1-smo((t-a-d-.25)/.6))});
+    tr.t.push(t);tr.x.push(200+5*Math.sin(t*1.7));tr.y.push(600-Y*px);tr.c.push(1)}
+  return {tr,cal:[[330,640],[330,640-.45*px]],cm:45,bar:[200,600-.52*px],cur:1.05}}
+function demoCmj(){const fs=120,px=300,vto=2.6,T=2*vto/9.81,tTo=1.15,tLd=tTo+T,yTo=.10,tr={t:[],x:[],y:[],c:[],P:{toe:{x:[],y:[],c:[]}}};
+  const herm=(t,t0,t1,y0,y1,v0,v1)=>{const d=t1-t0,u=(t-t0)/d;return (2*u**3-3*u**2+1)*y0+(u**3-2*u**2+u)*d*v0+(-2*u**3+3*u**2)*y1+(u**3-u**2)*d*v1};
+  const Y=t=>t<.4?0:t<.85?-.30*smo((t-.4)/.45):t<tTo?herm(t,.85,tTo,-.30,yTo,0,vto):t<tLd?yTo+vto*(t-tTo)-4.905*(t-tTo)**2:t<tLd+.3?herm(t,tLd,tLd+.3,yTo,-.15,-vto,0):-.15+.15*smo((t-tLd-.3)/.5);
+  for(let i=0;i<=(tLd+.9)*fs;i++){const t=i/fs,y=Y(t);tr.t.push(t);tr.x.push(200);tr.y.push(420-y*px);tr.c.push(1);const rise=t>tTo&&t<tLd?y-yTo:0;tr.P.toe.x.push(232);tr.P.toe.y.push(655-rise*px);tr.P.toe.c.push(1)}
+  return {tr,cal:[[340,655],[340,355]],cm:100,bar:null,cur:1.42}}
+function setDemo(){V.has=false;V.slow=1;V.target=null;V.extra={};V.man={};V.mode=null;V.preset=SPORT[V.sport].presets[0];
+  const d=V.sport==='pullup'?demoPull():V.sport==='cmj'?demoCmj():{tr:demoTrack(),cal:[[190,650],[190,515]],cm:45,bar:null,cur:1};
+  V.track=d.tr;V.dur=d.tr.t[d.tr.t.length-1];V.cw=405;V.ch=720;V.t0=0;V.t1=V.dur;V.cur=d.cur;V.cal={a:d.cal[0],b:d.cal[1],cm:d.cm};V.bar=d.bar;reanalyze()}
 const pxPerM=()=>{const c=V.cal;return c.a&&c.b&&c.cm>0?Math.hypot(c.a[0]-c.b[0],c.a[1]-c.b[1])/(c.cm/100):null};
-function reanalyze(){const p=pxPerM();V.res=V.track&&p?analyze(V.track,{pxPerM:p,slow:V.slow,mass:parseFloat(V.mass)||0,rate:V.rate,angles:PRESET[V.preset].ang}):null}
+function totalMass(){const a=parseFloat(V.mass)||0,b=parseFloat(V.body)||0;if(V.sport==='free')return a||(V.has?0:30);if(!V.has&&!b)return 75+a;return b?b+a:0}
+function frameDt(){const t=V.track&&V.track.t;if(!t||t.length<3)return null;const d=[];for(let i=1;i<t.length;i++)d.push(t[i]-t[i-1]);return median(d)/V.slow}
+function sportReport(p){const r=V.res,tr=V.track;
+  if(V.sport==='pullup')return pullupReport(r,{mass:totalMass(),barY:V.bar?-(V.bar[1]-tr.y[0])/p:null});
+  if(V.sport==='cmj'){let toe=null;if(tr.P&&tr.P.toe&&tr.P.toe.y.length===tr.t.length){const T=tr.t.map(v=>(v-tr.t[0])/V.slow),bs=tr.P.toe.y.filter((_,i)=>T[i]<.25),base=median(bs.length?bs:tr.P.toe.y.slice(0,3));toe={t:T,rise:tr.P.toe.y.map(y=>(base-y)/p)}}
+    const foot=tr.fd&&tr.fd.length===tr.t.length?{t:tr.t.map(v=>(v-tr.t[0])/V.slow),v:tr.fd}:null;
+    const o={toe,foot,mass:totalMass(),dtFrame:frameDt()};let R=cmjReport(r,o);
+    if(R&&(V.man.to!=null||V.man.ld!=null)){const to=V.man.to!=null?(V.man.to-tr.t[0])/V.slow:R.to,ld=V.man.ld!=null?(V.man.ld-tr.t[0])/V.slow:R.ld;if(to!=null&&ld!=null&&ld>to)R=cmjReport(r,Object.assign({},o,{manual:{to,ld}}))}
+    return R}
+  return null}
+function reanalyze(){const p=pxPerM();V.res=V.track&&p?analyze(V.track,{pxPerM:p,slow:V.slow,mass:totalMass(),rate:V.rate,angles:PRESET[V.preset].ang,win:V.sport==='cmj'?.03:.06}):null;V.rep=V.res?sportReport(p):null}
 
 /* ----- 영상 다루기 ----- */
 function once(el,ev,ms){return new Promise((res,rej)=>{const ok=()=>{clr();res()},bad=()=>{clr();rej(new Error('video'))},clr=()=>{el.removeEventListener(ev,ok);el.removeEventListener('error',bad);clearTimeout(to)};el.addEventListener(ev,ok);el.addEventListener('error',bad);const to=setTimeout(bad,ms||8000)})}
@@ -242,7 +338,7 @@ async function loadFile(file){stopPlay();if(vid.src&&vid.src.indexOf('blob:')===
   try{await once(vid,'loadedmetadata')}catch(e){toast('이 영상은 브라우저에서 열 수 없습니다. MP4(H.264)로 다시 시도해 주세요.');return}
   const vw=vid.videoWidth,vh=vid.videoHeight,sc=Math.min(1,720/Math.max(vw,vh));if(!vw||!isFinite(vid.duration)){toast('영상 정보를 읽지 못했습니다.');return}
   V.cw=Math.round(vw*sc);V.ch=Math.round(vh*sc);wk.width=V.cw;wk.height=V.ch;wctx=wk.getContext('2d',{willReadFrequently:true});
-  V.has=true;V.dur=vid.duration;V.t0=0;V.t1=Math.min(V.dur,30);V.cur=0;V.track=null;V.res=null;V.target=null;V.extra={};V.cal={a:null,b:null,cm:V.cal.cm||45};V.mode=null;
+  V.has=true;V.dur=vid.duration;V.t0=0;V.t1=Math.min(V.dur,30);V.cur=0;V.track=null;V.res=null;V.rep=null;V.target=null;V.extra={};V.bar=null;V.man={};V.cal={a:null,b:null,cm:V.cal.cm||SPORT[V.sport].cm};V.mode=null;
   try{await vid.play();vid.pause()}catch(e){}
   try{if(vid.readyState<2)await once(vid,'loadeddata',6000)}catch(e){}
   await seekTo(0);grab();render()}
@@ -256,12 +352,14 @@ function play(){if(V.busy)return;if(V.playing){stopPlay();return}V.playing=true;
 /* ----- 추적 실행 ----- */
 async function runTrack(fix){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.abort=false;V.mode=null;uiState();
   const dt=1/V.rate,half=V.half,w=V.cw,h=V.ch,times=[];for(let t=V.t0;t<=V.t1+1e-6&&times.length<1200;t+=dt)times.push(Math.min(t,V.dur-.002));
-  const keys=ptList().map(p=>p[0]),st={},tr={t:[],x:[],y:[],c:[],P:{}};keys.slice(1).forEach(k=>tr.P[k]={x:[],y:[],c:[]});const arr=k=>k==='main'?tr:tr.P[k];let start=0,old=null;
+  const keys=ptList().map(p=>p[0]),st={},tr={t:[],x:[],y:[],c:[],P:{}};const ppm=pxPerM(),toeP=keys.includes('toe')?(fix&&V.track&&V.track.fdBox?null:ptPos('toe')):null;
+  let fb=fix&&V.track&&V.track.fdBox?V.track.fdBox:(toeP&&ppm?{x0:Math.max(0,Math.round(toeP[0]-half)),x1:Math.min(w-1,Math.round(toeP[0]+half)),y0:Math.max(0,Math.round(toeP[1]-.03*ppm)),y1:Math.min(h-1,Math.round(toeP[1]+2))}:null),fref=fix&&V.track&&V.track.fdRef?V.track.fdRef:null;
+  if(fb){tr.fd=[];tr.fdBox=fb}keys.slice(1).forEach(k=>tr.P[k]={x:[],y:[],c:[]});const arr=k=>k==='main'?tr:tr.P[k];let start=0,old=null;
   if(fix&&V.track&&V.track.t.length){/* 지금 화면에 보이는 프레임에서 정확히 다시 시작 */
     start=times.findIndex(t=>t>fix.t+1e-6);if(start<0)start=times.length;times.splice(start,0,fix.t);const o=V.track;old=o;
     /* 고친 점은 새 위치에서, 나머지 점은 그 시점의 기존 위치에서 다시 시작 */
     keys.forEach(k=>{const q=k===fix.k?fix:trackAt(fix.t,k);st[k]={pos:{x:q.x,y:q.y},vel:{x:0,y:0}}});
-    for(let i=0;i<o.t.length;i++)if(o.t[i]<times[start]-1e-6){tr.t.push(o.t[i]);keys.forEach(k=>{const sr=k==='main'?o:o.P[k],d=arr(k);d.x.push(sr.x[i]);d.y.push(sr.y[i]);d.c.push(sr.c[i])})}}
+    for(let i=0;i<o.t.length;i++)if(o.t[i]<times[start]-1e-6){tr.t.push(o.t[i]);if(fb&&o.fd)tr.fd.push(o.fd[i]);keys.forEach(k=>{const sr=k==='main'?o:o.P[k],d=arr(k);d.x.push(sr.x[i]);d.y.push(sr.y[i]);d.c.push(sr.c[i])})}}
   else keys.forEach(k=>{const p=ptPos(k);st[k]={pos:{x:p[0],y:p[1]},vel:{x:0,y:0}}});
   let init=false,last=null;const R=Math.max(14,Math.round(half*1.6));V.track=tr;
   for(let i=start;i<times.length;i++){if(V.abort)break;const mt=await seekTo(times[i]);
@@ -271,7 +369,9 @@ async function runTrack(fix){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.a
     if(mt==null&&init&&sum===last)continue; /* 프레임 시각을 모를 때: 앞과 완전히 같은 그림은 중복으로 보고 건너뜀 */
     last=sum;const ts=mt!=null?mt:times[i];
     if(!init&&old)keys.forEach(k=>{if(k!==fix.k){const q=trackAt(ts,k,old);if(q)st[k].pos={x:q.x,y:q.y}}});
-    if(!init)while(tr.t.length&&tr.t[tr.t.length-1]>=ts-1e-5){tr.t.pop();keys.forEach(k=>{const d=arr(k);d.x.pop();d.y.pop();d.c.pop()})}
+    if(!init)while(tr.t.length&&tr.t[tr.t.length-1]>=ts-1e-5){tr.t.pop();if(tr.fd)tr.fd.pop();keys.forEach(k=>{const d=arr(k);d.x.pop();d.y.pop();d.c.pop()})}
+    if(fb){const bw=fb.x1-fb.x0+1;if(!fref){fref=new Float32Array(bw*(fb.y1-fb.y0+1));for(let y=fb.y0,q=0;y<=fb.y1;y++)for(let x=fb.x0;x<=fb.x1;x++,q++)fref[q]=g[y*w+x];tr.fdRef=fref}
+      let sd=0,q=0;for(let y=fb.y0;y<=fb.y1;y++)for(let x=fb.x0;x<=fb.x1;x++,q++)sd+=Math.abs(g[y*w+x]-fref[q]);tr.fd.push(sd/q)}
     keys.forEach(k=>{const s=st[k];let c=1;
       if(!init){s.tm=cutPatch(g,w,h,s.pos.x,s.pos.y,half);s.tm0=s.tm.slice()}
       else{const px=Math.max(half,Math.min(w-half-1,s.pos.x+s.vel.x)),py=Math.max(half,Math.min(h-half-1,s.pos.y+s.vel.y));let r=matchAround(g,w,h,s.tm,half,px,py,R);
@@ -299,11 +399,13 @@ function drawExtras(c,lw){const pr=PRESET[V.preset];if(!pr.pts.length)return;con
 const realT=()=>V.track&&V.track.t.length?(V.cur-V.track.t[0])/V.slow:0;
 function resAt(){const r=V.res;if(!r)return null;const i=Math.max(0,Math.min(r.t.length-1,Math.round(realT()*r.fs)));return {i,vy:r.vy[i],sp:r.sp[i],Y:r.Y[i],P:r.P?r.P[i]:null}}
 function paint(){const cv=$('#cv');if(!cv)return;const c=cv.getContext('2d');
-  if(V.has&&wctx)c.drawImage(wk,0,0);else{const g=c.createLinearGradient(0,0,0,V.ch);g.addColorStop(0,'#1c3138');g.addColorStop(1,'#0e1b20');c.fillStyle=g;c.fillRect(0,0,V.cw,V.ch);c.fillStyle='#22383f';c.fillRect(0,662,V.cw,58);c.fillStyle='rgba(255,255,255,.75)';c.font='600 20px sans-serif';c.fillText('예시 궤적',18,36)}
+  if(V.has&&wctx)c.drawImage(wk,0,0);else{const g=c.createLinearGradient(0,0,0,V.ch);g.addColorStop(0,'#1c3138');g.addColorStop(1,'#0e1b20');c.fillStyle=g;c.fillRect(0,0,V.cw,V.ch);c.fillStyle='#22383f';c.fillRect(0,662,V.cw,58);c.fillStyle='rgba(255,255,255,.75)';c.font='600 20px sans-serif';c.fillText('예시 궤적 · '+SPORT[V.sport].n,18,36)}
   const lw=Math.max(2.5,V.cw/150);c.lineCap='round';c.lineJoin='round';
   const cal=V.cal,ca=cal.a,cb=V.mode==='calB'&&V.tmp?V.tmp:cal.b;
   if(ca){c.strokeStyle='#ffd43b';c.fillStyle='#ffd43b';c.lineWidth=lw*.8;if(cb){c.setLineDash([lw*2.5,lw*2]);c.beginPath();c.moveTo(ca[0],ca[1]);c.lineTo(cb[0],cb[1]);c.stroke();c.setLineDash([]);c.beginPath();c.arc(cb[0],cb[1],lw*1.4,0,7);c.fill()}c.beginPath();c.arc(ca[0],ca[1],lw*1.4,0,7);c.fill();
     if(cb){c.font='600 '+Math.round(lw*5)+'px sans-serif';const mx=(ca[0]+cb[0])/2+lw*2.5,my=(ca[1]+cb[1])/2;c.strokeStyle='#0b1519';c.lineWidth=lw;c.strokeText(cal.cm+' cm',mx,my);c.fillText(cal.cm+' cm',mx,my)}}
+  const barY=V.mode==='bar'&&V.tmp?V.tmp[1]:(V.sport==='pullup'&&V.bar?V.bar[1]:null);
+  if(barY!=null){c.setLineDash([lw*3,lw*2]);c.strokeStyle='rgba(11,21,25,.85)';c.lineWidth=lw*1.6;c.beginPath();c.moveTo(0,barY);c.lineTo(V.cw,barY);c.stroke();c.strokeStyle='#ffd43b';c.lineWidth=lw*.7;c.stroke();c.setLineDash([]);c.font='700 '+Math.round(lw*5)+'px sans-serif';c.fillStyle='#ffd43b';c.fillText('바',lw*2,barY-lw*2)}
   const tg=V.mode==='target'||V.mode==='fix'?V.tmp:null,box=(p,col)=>{c.strokeStyle='#0b1519';c.lineWidth=lw*1.3;c.strokeRect(p[0]-V.half,p[1]-V.half,2*V.half+1,2*V.half+1);c.strokeStyle=col;c.lineWidth=lw*.7;c.strokeRect(p[0]-V.half,p[1]-V.half,2*V.half+1,2*V.half+1);c.beginPath();c.moveTo(p[0]-4,p[1]);c.lineTo(p[0]+4,p[1]);c.moveTo(p[0],p[1]-4);c.lineTo(p[0],p[1]+4);c.stroke()};
   const tr=V.track;
   if(tr&&tr.t.length>1){const cur=trackAt(V.cur),end=V.busy?tr.t.length-1:cur.i;
@@ -315,6 +417,7 @@ function paint(){const cv=$('#cv');if(!cv)return;const c=cv.getContext('2d');
   else if(V.target&&!(tg&&V.mode==='target'&&V.tIdx===0))box(V.target,'#ffd43b');
   drawExtras(c,lw);
   if(tg)box(tg,'#ffffff');
+  const R=V.rep;if(V.sport==='cmj'&&R&&R.to!=null&&R.ld!=null&&!V.busy){const t=realT();if(t>=R.to&&t<=R.ld){const txt='체공 '+Math.round((t-R.to)*1000)+' ms';c.font='700 '+Math.round(lw*6)+'px sans-serif';const tw=c.measureText(txt).width;c.fillStyle='rgba(11,21,25,.8)';c.fillRect(V.cw-tw-24,10,tw+14,lw*9);c.fillStyle='#7cc6ff';c.fillText(txt,V.cw-tw-17,10+lw*6.6)}}
   const sc=$('#scrub');if(sc&&document.activeElement!==sc)sc.value=V.cur;const tl=$('#tlabel');if(tl)tl.textContent=V.cur.toFixed(2)+' / '+V.dur.toFixed(2)+' s';
   const cu=document.getElementById('cursor');if(cu&&CH.tmax>0){const x=CH.L+Math.max(0,Math.min(1,realT()/CH.tmax))*(CH.W-CH.L-CH.R);cu.setAttribute('x1',x);cu.setAttribute('x2',x)}}
 
@@ -329,6 +432,7 @@ function bindStage(){const st=$('#stage');if(!st)return;let down=false;
   const up=()=>{if(!down)return;down=false;$('#loupe').style.display='none';const p=V.tmp.map(v=>Math.round(v*10)/10);V.tmp=null;
     if(V.mode==='calA'){V.cal.a=p;V.cal.b=null;V.mode='calB'}
     else if(V.mode==='calB'){if(Math.hypot(p[0]-V.cal.a[0],p[1]-V.cal.a[1])<8){toast('두 점이 너무 가깝습니다. 반대쪽 끝을 다시 눌러 주세요.');paint();return}V.cal.b=p;V.mode=null;reanalyze()}
+    else if(V.mode==='bar'){V.bar=p;V.mode=null;reanalyze()}
     else if(V.mode==='target'){const k=ptList()[V.tIdx][0];if(k==='main')V.target=p;else V.extra[k]=p;V.track=null;V.res=null;const nx=ptList().findIndex(q=>!ptPos(q[0]));if(nx>=0)V.tIdx=nx;else V.mode=null}
     else if(V.mode==='fix'){V.mode=null;runTrack({t:V.cur,k:V.fixK,x:p[0],y:p[1]});return}
     render()};
@@ -345,7 +449,7 @@ function chartSVG(series,unit,cursor,marks){const W=380,H=220,L=CH.L,R=CH.R,T=14
   if(lo<0)s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(0)+'" y2="'+Y(0)+'" stroke="var(--muted)"/>';
   const step=tmax>4?1:tmax>1.6?.5:.25;for(let t=0;t<=tmax+1e-6;t+=step)s+='<text x="'+X(t)+'" y="'+(H-10)+'" text-anchor="middle" font-size="11" fill="var(--muted)">'+(+t.toFixed(2))+'</text>';
   s+='<text x="'+(W-R)+'" y="'+(H-10)+'" text-anchor="end" font-size="11" fill="var(--muted)" dx="0" dy="-13">초</text><text x="'+(L+4)+'" y="'+(T+10)+'" font-size="11" fill="var(--muted)">'+unit+'</text>';
-  (marks||[]).forEach(m=>{s+='<rect x="'+X(m.t0)+'" y="'+T+'" width="'+Math.max(1,X(m.t1)-X(m.t0))+'" height="'+(H-T-B)+'" fill="'+(m.dir>0?'var(--up)':'var(--down)')+'" opacity=".09"/>'});
+  (marks||[]).forEach(m=>{s+='<rect x="'+X(m.t0)+'" y="'+T+'" width="'+Math.max(1,X(m.t1)-X(m.t0))+'" height="'+(H-T-B)+'" fill="'+(m.dir>0?'var(--up)':m.dir<0?'var(--down)':'var(--accent)')+'" opacity=".09"/>'});
   series.forEach(se=>{const st=Math.max(1,Math.floor(se.t.length/300));let pts='';for(let i=0;i<se.t.length;i+=st)pts+=X(se.t[i]).toFixed(1)+','+Y(se.v[i]).toFixed(1)+' ';s+='<polyline fill="none" stroke="'+se.color+'" stroke-width="2.4" stroke-linejoin="round"'+(se.dash?' stroke-dasharray="'+se.dash+'"':'')+' points="'+pts+'"/>';
     if(se.peak!=null){const i=se.peak;s+='<circle cx="'+X(se.t[i])+'" cy="'+Y(se.v[i])+'" r="5" fill="'+se.color+'" stroke="var(--surface)" stroke-width="2"/><text x="'+Math.min(W-R-4,X(se.t[i])+8)+'" y="'+Math.max(T+12,Y(se.v[i])-7)+'" font-size="12" font-weight="700" fill="var(--ink)"'+(X(se.t[i])>W*.7?' text-anchor="end" dx="-16"':'')+'>'+se.v[i].toFixed(Math.abs(se.v[i])>20?0:2)+'</text>'}});
   if(cursor)s+='<line id="cursor" x1="'+L+'" x2="'+L+'" y1="'+T+'" y2="'+(H-B)+'" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="3 3"/>';
@@ -358,25 +462,61 @@ function pathSVG(r){const W=300,H=300,pad=22;let xmin=1e9,xmax=-1e9,ymin=1e9,yma
   return '<svg class="chart" style="max-width:300px" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="궤적. 가로세로 같은 축척">'+s+'</svg>'}
 
 /* ===== 분석 화면 ===== */
-function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has;let h='<div class="card" id="results"><div class="row"><h2>결과</h2>'+(demo?'<span class="pill n">예시</span>':'')+'</div>';
+function tile(l,v,u,sub){return '<div class="tile"><div class="small muted">'+l+'</div><div class="v">'+v+(u?' <small>'+u+'</small>':'')+'</div>'+(sub?'<div class="small muted">'+sub+'</div>':'')+'</div>'}
+function pullHTML(R){if(!R||!R.sum)return '<div class="banner warn">올라가는 동작을 찾지 못했습니다. 분석 구간과 추적점을 확인해 주세요.</div>';const S2=R.sum,reps=R.reps;
+  let h='<div class="tiles">'+tile('반복',S2.n,'회',S2.short?'짧은 반복 '+S2.short+'회 포함':'모두 비슷한 높이까지 올라감')+tile('최고 평균 속도',f2(S2.best),'m/s',S2.bestI+'번째 반복')+
+    tile('속도 저하',S2.loss==null?'–':f0(S2.loss),S2.loss==null?'':'%','최고 → 마지막 반복')+tile('평균 이동 거리',f0(S2.rom*100),'cm','반복당')+
+    (S2.pMean!=null?tile('평균 파워',f0(S2.pMean),'W','최고 반복 · 체중+추가 중량'):'')+(S2.chinOk!=null?tile('턱 넘김',S2.chinOk+' / '+S2.n,'회','바 높이 기준'):'')+'</div>';
+  const hasE=reps.some(q=>q.elbow!=null),hasB=reps[0].margin!=null,hasP=reps[0].pMean!=null,mxE=hasE?Math.max.apply(null,reps.map(q=>q.elbow)):0;
+  h+='<h3>반복별</h3><div class="tscroll"><table class="mt"><tr><th>반복</th><th class="v">이동</th><th class="v">올림</th><th class="v">평균</th><th class="v">최고</th>'+(hasP?'<th class="v">파워</th>':'')+'<th class="v">내림</th>'+(hasB?'<th class="v">턱–바</th>':'')+(hasE?'<th class="v">아래 팔꿈치</th>':'')+'</tr>'+
+    reps.map(q=>'<tr><td class="num">'+q.i+(q.i===S2.bestI&&reps.length>1?' <span class="pill g">최고</span>':'')+(q.short?' <span class="pill w">짧음</span>':'')+'</td><td class="v">'+f0(q.rom*100)+'cm</td><td class="v">'+f2(q.T)+'초</td><td class="v">'+f2(q.mean)+'</td><td class="v">'+f2(q.peak)+'</td>'+(hasP?'<td class="v">'+f0(q.pMean)+'W</td>':'')+'<td class="v">'+(q.ecc==null?'–':f2(q.ecc)+'초')+'</td>'+(hasB?'<td class="v">'+(q.margin>0?'+':'')+f1(q.margin*100)+'cm</td>':'')+(hasE?'<td class="v">'+f0(q.elbow)+'°'+(mxE-q.elbow>=10?' <span class="pill w">덜 내려옴</span>':'')+'</td>':'')+'</tr>').join('')+'</table></div>';
+  h+='<p class="small muted">속도 단위는 m/s입니다. 평균 속도는 올라가는 구간 전체의 평균(이동 거리 ÷ 올린 시간)입니다. 같은 무게로 반복할수록 평균 속도가 떨어지는데, 속도 저하가 클수록 피로가 많이 쌓였다는 뜻입니다. 파워는 (체중+추가 중량)×중력×이동 거리 ÷ 올린 시간으로, 몸 전체를 들어 올린 평균 일률입니다.'+
+    (hasB?' 턱–바는 가장 높이 올라갔을 때 턱이 바보다 위(+)인지 아래(−)인지입니다.':' 턱이 바를 넘었는지 보려면 4번에서 바 높이를 찍으세요.')+(hasE?' 아래 팔꿈치는 각 반복을 시작하기 전 가장 펴진 각도이며, 다른 반복보다 10° 이상 작으면 덜 내려온 것으로 표시합니다.':'')+(S2.short?' 짧음은 가장 큰 반복의 90%보다 덜 올라간 반복입니다.':'')+'</p>';
+  return h}
+function cmjHTML(R){if(!R)return '<div class="banner warn">점프를 찾지 못했습니다. 분석 구간을 확인해 주세요.</div>';let h='';
+  if(!R.still)h+='<div class="banner warn">분석 구간 처음 0.25초 동안 골반이 움직이고 있습니다. 선 자세 기준이 흔들려 반동 깊이와 골반 상승이 틀릴 수 있습니다. 가만히 서 있는 시점을 시작으로 잡아 주세요.</div>';
+  if(R.hFlight==null)h+='<div class="banner warn">'+(R.src==='toe'&&R.ld==null?'착지를 찾지 못했습니다. 영상이 착지 전에 끝났거나 발끝 추적이 끊겼습니다.':'발끝을 추적하지 않아 체공 시간을 잴 수 없습니다.')+' 아래 버튼으로 이륙·착지 프레임을 직접 지정하면 체공 시간으로 높이를 잽니다. 지금 높이는 골반의 이륙 속도로 계산한 참고값입니다.</div>';
+  else if(R.T<.2||R.T>1)h+='<div class="banner warn">체공 시간이 '+f2(R.T)+'초로 일반적인 범위를 벗어납니다. 이륙·착지 시점을 확인해 주세요.</div>';
+  const src={toe:'체공 시간 · 발끝 자동 감지',manual:'체공 시간 · 직접 지정',vel:'골반 이륙 속도(참고)'}[R.hSrc];
+  h+='<div class="tiles">'+tile('점프 높이',f1(R.h*100),'cm',src+(R.err!=null?' · ±'+f1(R.err*100)+'cm':''))+(R.T!=null?tile('체공 시간',f0(R.T*1000),'ms'):'')+
+    tile('반동 깊이',f0(R.depth*100),'cm','선 자세 → 최저점 (골반)')+tile('이륙 속도',f2(R.vTo),'m/s','골반 기준')+
+    (R.ttt!=null?tile('이륙까지 시간',f2(R.ttt),'초','움직임 시작 → 이륙'):'')+(R.rsi!=null?tile('RSImod',f2(R.rsi),'','높이(m) ÷ 이륙까지 시간'):'')+
+    (R.pp!=null?tile('최대 파워',f0(R.pp),'W','골반 움직임 기준'):'')+(R.sayers!=null?tile('Sayers 추정 파워',f0(R.sayers),'W','점프 높이·체중으로 계산'):'')+(R.knee!=null?tile('무릎 최소 각도',f0(R.knee),'°','반동 최저점 부근'):'')+'</div>';
+  h+='<h3>단계별</h3><div class="tscroll"><table class="mt"><tr><th>단계</th><th class="v">걸린 시간</th><th class="v">구간(초)</th><th class="v">속도(m/s)</th></tr>'+
+    '<tr><td><span class="pill w">반동</span></td><td class="v">'+f2(R.ecc)+'초</td><td class="v">'+f2(R.tOn)+'–'+f2(R.tLow)+'</td><td class="v">최고 '+f2(-R.vDown)+' ↓</td></tr>'+
+    '<tr><td><span class="pill g">추진</span></td><td class="v">'+f2(R.con)+'초</td><td class="v">'+f2(R.tLow)+'–'+f2(R.tLow+R.con)+'</td><td class="v">이륙 '+f2(R.vTo)+' ↑</td></tr>'+
+    (R.T!=null?'<tr><td><span class="pill n">체공</span></td><td class="v">'+f2(R.T)+'초</td><td class="v">'+f2(R.to)+'–'+f2(R.ld)+'</td><td class="v">–</td></tr>':'')+'</table></div>';
+  h+='<h3>높이 계산 비교</h3><div class="tscroll"><table class="mt"><tr><th>방법</th><th class="v">높이</th></tr>'+(R.hFlight!=null?'<tr><td>체공 시간 (g × t² ÷ 8)</td><td class="v">'+f1(R.hFlight*100)+'cm</td></tr>':'')+(R.hVel!=null?'<tr><td>골반 이륙 속도 (v² ÷ 2g)</td><td class="v">'+f1(R.hVel*100)+'cm</td></tr>':'')+'<tr><td>골반 상승 (선 자세 → 최고점)</td><td class="v">'+f1(R.hDisp*100)+'cm</td></tr></table></div>'+
+    '<p class="small muted">기록끼리 비교할 때는 체공 시간 높이를 쓰세요. 이륙 속도 값은 화면 속도를 평활하는 과정에서 조금 낮게 나옵니다. 골반 상승은 이륙 직전 발뒤꿈치를 들고 몸을 펴며 올라간 높이까지 더해져 가장 크게 나옵니다. 체공 시간 방법은 이륙과 착지 때 자세가 같다고 가정하므로, 착지 때 무릎을 편 채 발끝부터 닿아야 맞습니다.'+(R.err!=null?' 영상 프레임 간격 때문에 체공 높이에 약 ±'+f1(R.err*100)+'cm 오차가 있습니다. 120~240fps 슬로모션으로 찍으면 줄어듭니다.':'')+'</p>';
+  return h}
+function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has,R=V.rep,sp=V.sport;let h='<div class="card" id="results"><div class="row"><h2>결과</h2>'+(demo?'<span class="pill n">예시</span>':'')+'</div>';
   if(!demo&&s.conf!=null){if(s.low>0)h+='<div class="banner warn">추적이 불확실한 구간이 있습니다(전체의 '+Math.round(s.low/r.conf.length*100)+'%). 영상 위 회색 선이 그 구간입니다. 그 시점으로 옮긴 뒤 아래 <b>위치 고치기</b>를 쓰세요.</div>'}
-  h+='<div class="tiles"><div class="tile"><div class="small muted">최고 상승 속도</div><div class="v">'+f2(s.vPeak)+' <small>m/s</small></div><div class="small muted">'+f2(s.tPeak)+'초 시점</div></div>'+
+  let marks=r.phases;
+  if(sp==='pullup')h+=pullHTML(R);
+  else if(sp==='cmj'){h+=cmjHTML(R);if(R)marks=[{t0:R.tOn,t1:R.tLow,dir:-1},{t0:R.tLow,t1:R.tLow+R.con,dir:1}].concat(R.to!=null&&R.ld!=null?[{t0:R.to,t1:R.ld,dir:0}]:[])}
+  else{  h+='<div class="tiles"><div class="tile"><div class="small muted">최고 상승 속도</div><div class="v">'+f2(s.vPeak)+' <small>m/s</small></div><div class="small muted">'+f2(s.tPeak)+'초 시점</div></div>'+
    '<div class="tile"><div class="small muted">평균 상승 속도</div><div class="v">'+f2(s.meanAsc)+' <small>m/s</small></div><div class="small muted">'+(s.meanAsc==null?'상승 구간 없음':'가장 긴 상승 '+f0(s.dyAsc*100)+'cm / '+f2(s.durAsc)+'초')+'</div></div>'+
    '<div class="tile"><div class="small muted">이동 높이</div><div class="v">'+f0(s.rom*100)+' <small>cm</small></div><div class="small muted">최저–최고</div></div>'+
    '<div class="tile"><div class="small muted">앞뒤 이동 폭</div><div class="v">'+f1(s.xr*100)+' <small>cm</small></div><div class="small muted">궤적의 좌우 범위</div></div>'+
    (s.pPeak!=null?'<div class="tile"><div class="small muted">최대 파워</div><div class="v">'+f0(s.pPeak)+' <small>W</small></div><div class="small muted">무게×(중력+가속)×속도</div></div><div class="tile"><div class="small muted">간이 파워</div><div class="v">'+f0(s.pSimple)+' <small>W</small></div><div class="small muted">무게×중력×최고 속도</div></div>':'')+'</div>';
+}
   const key=(V.chart==='P'&&!r.P)||(V.chart==='ang'&&!r.angles.length)?'vy':V.chart,def=CDEF[key];let pk=null;if(key==='vy'||key==='sp'||key==='P'){pk=0;const a=r[key];for(let i=0;i<a.length;i++)if(a[i]>a[pk])pk=i}
   h+='<div class="row"><h3>시간에 따른 변화</h3><div class="field" style="max-width:210px;margin-left:auto"><label for="chartSel">그래프</label><select id="chartSel">'+Object.keys(CDEF).filter(k=>(k!=='P'||r.P)&&(k!=='ang'||r.angles.length)).map(k=>'<option value="'+k+'"'+(k===key?' selected':'')+'>'+CDEF[k][0]+'</option>').join('')+'</select></div></div>'+
-   chartSVG(key==='ang'?r.angles.map((a,j)=>({t:r.t,v:a.a,color:COL[j],dash:j?'6 4':null})):[{t:r.t,v:r[key],color:'var(--accent)',peak:pk}],def[1],true,r.phases)+(key==='ang'?'<div class="row small">'+r.angles.map((a,j)=>'<span><svg width="26" height="8" style="vertical-align:middle"><line x1="0" x2="26" y1="4" y2="4" stroke="'+COL[j]+'" stroke-width="2.4"'+(j?' stroke-dasharray="6 4"':'')+'/></svg> '+a.n+'</span>').join('')+'</div>':'')+'<p class="small muted">옅은 초록은 상승 구간, 주황은 하강 구간입니다. 점선은 영상의 현재 시점입니다.</p>';
+   chartSVG(key==='ang'?r.angles.map((a,j)=>({t:r.t,v:a.a,color:COL[j],dash:j?'6 4':null})):[{t:r.t,v:r[key],color:'var(--accent)',peak:pk}],def[1],true,marks)+(key==='ang'?'<div class="row small">'+r.angles.map((a,j)=>'<span><svg width="26" height="8" style="vertical-align:middle"><line x1="0" x2="26" y1="4" y2="4" stroke="'+COL[j]+'" stroke-width="2.4"'+(j?' stroke-dasharray="6 4"':'')+'/></svg> '+a.n+'</span>').join('')+'</div>':'')+'<p class="small muted">'+(V.sport==='cmj'?'주황은 반동(내려감), 초록은 추진, 파랑은 체공 구간입니다.':'옅은 초록은 상승 구간, 주황은 하강 구간입니다.')+' 점선은 영상의 현재 시점입니다.</p>';
+  if(sp!=='pullup'){
   if(r.angles.length){const lowA=r.angles.reduce((m,a)=>Math.max(m,a.low),0);h+='<h3>관절 각도</h3><div class="tscroll"><table class="mt"><tr><th>각도</th><th class="v">최소</th><th class="v">최대</th><th class="v">최고 속도 시점</th></tr>'+r.angles.map(a=>'<tr><td><b>'+a.n+'</b></td><td class="v">'+f0(a.min)+'° <span class="muted">('+f2(a.tMin)+'초)</span></td><td class="v">'+f0(a.max)+'°</td><td class="v">'+f0(a.atPeak)+'°</td></tr>').join('')+'</table></div><p class="small muted">세 점이 이루는 가운데 점의 각입니다. 완전히 펴면 180°에 가깝습니다. 찍은 점이 관절 중심에서 벗어난 만큼 값이 달라지므로, 절대값보다 같은 방식으로 찍은 기록 사이의 차이를 보세요.'+(lowA?' 각도용 점의 추적이 불확실한 구간이 있습니다(최대 '+Math.round(lowA/r.t.length*100)+'%).':'')+'</p>'}
+  }
+  if(sp==='free'){
   if(r.reps.length>1){const mx=Math.max.apply(null,r.reps.map(p=>p.mean));h+='<h3>반복별 속도</h3><div class="tscroll"><table class="mt"><tr><th>반복</th><th class="v">평균</th><th class="v">최고</th><th style="width:38%"></th></tr>'+r.reps.map((p,i)=>'<tr><td class="num">'+(i+1)+'</td><td class="v">'+f2(p.mean)+'</td><td class="v">'+f2(p.peak)+'</td><td><div class="bar" style="width:'+Math.round(p.mean/mx*100)+'%"></div></td></tr>').join('')+'</table></div><p class="small muted">가장 큰 상승의 80% 이상 올라간 구간을 한 번의 반복으로 셉니다. 가장 빠른 반복 대비 마지막 반복의 평균 속도 저하는 <b>'+f1(s.loss)+'%</b>입니다.</p>'}
   h+='<h3>궤적</h3>'+pathSVG(r)+'<p class="small muted">○ 시작, ■ 끝. 세로 점선은 시작 위치의 수직선입니다. 가로와 세로는 같은 축척입니다.</p>';
   if(r.phases.length)h+='<h3>구간별</h3><div class="tscroll"><table class="mt"><tr><th>구간</th><th class="v">시간(초)</th><th class="v">이동</th><th class="v">평균</th><th class="v">최고</th></tr>'+r.phases.map((p,i)=>'<tr><td><span class="pill '+(p.dir>0?'g':'w')+'">'+(p.dir>0?'상승':'하강')+'</span></td><td class="v">'+f2(p.t0)+'–'+f2(p.t1)+'</td><td class="v">'+f0(Math.abs(p.dy)*100)+' cm</td><td class="v">'+f2(Math.abs(p.mean))+'</td><td class="v">'+f2(Math.abs(p.peak))+'</td></tr>').join('')+'</table></div><p class="small muted">속도 단위는 m/s입니다. 0.08 m/s보다 빠르게 0.12초 이상, 5cm 이상 움직인 구간만 셉니다.</p>';
-  h+='<p class="small muted">계산 간격 '+r.fs+'Hz'+(s.conf!=null?', 평균 추적 일치도 '+Math.round(s.conf*100)+'%':'')+'. 속도는 앞뒤 약 0.06초 창으로 평활한 뒤 구한 값입니다.</p>';
+  }
+  h+='<p class="small muted">계산 간격 '+r.fs+'Hz'+(s.conf!=null?', 평균 추적 일치도 '+Math.round(s.conf*100)+'%':'')+'. 속도는 앞뒤 약 '+(V.sport==='cmj'?'0.03':'0.06')+'초 창으로 평활한 뒤 구한 값입니다.</p>';
+  if(!demo&&V.sport==='cmj'){const R=V.rep;h+='<h3>이륙·착지 지정</h3><p class="small">현재 이륙 <b class="num">'+(R&&R.to!=null?f2(R.to):'–')+'</b>초 · 착지 <b class="num">'+(R&&R.ld!=null?f2(R.ld):'–')+'</b>초 <span class="pill n">'+(R&&R.src==='manual'?'직접 지정':R&&R.src==='toe'?'발끝 자동 감지':'없음')+'</span></p><div class="row"><button class="btn sm" type="button" id="setTo">현재 프레임을 이륙으로</button><button class="btn sm" type="button" id="setLd">현재 프레임을 착지로</button>'+(V.man.to!=null||V.man.ld!=null?'<button class="btn sm" type="button" id="manReset">자동 감지로 되돌리기</button>':'')+'</div><p class="small muted">자동 감지가 틀렸으면, 위 영상에서 1프레임 버튼으로 발끝이 바닥에서 떨어진 첫 프레임과 다시 닿은 첫 프레임을 찾아 각각 누르세요.</p>'}
   if(!demo)h+='<div class="row">'+(ptList().length>1?'<div class="field" style="max-width:150px"><label for="fixSel">고칠 점</label><select id="fixSel">'+ptList().map(p=>'<option value="'+p[0]+'"'+(V.fixK===p[0]?' selected':'')+'>'+p[1]+'</option>').join('')+'</select></div>':'')+'<button class="btn'+(V.mode==='fix'?' on':'')+'" type="button" id="fixBtn">현재 시점부터 위치 고치기</button><button class="btn primary" type="button" id="saveBtn">기록 저장</button></div>';
   return h+'</div>'}
 function guideText(){if(V.busy)return '추적 중입니다 '+V.prog;if(!V.has)return '예시 궤적입니다. 재생하거나 막대를 움직여 보세요. 내 영상을 선택하면 바뀝니다.';
-  return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?'속도를 잴 물체에서 무늬나 경계가 뚜렷한 곳이 잘 따라갑니다(바벨 끝, 원판 중심 등).':'관절 중심에서 주변과 구분되는 곳을 고르세요.'),fix:'이 시점의 <b>'+((ptList().find(q=>q[0]===V.fixK)||['','점'])[1])+'</b> 올바른 위치를 누르세요. 여기서부터 끝까지 다시 추적합니다.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
+  return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(ptList()[V.tIdx][0]==='toe'?'신발 앞코 끝을 찍습니다. 이륙과 착지를 이 점으로 잽니다.':'관절 중심에서 주변과 구분되는 곳을 고르세요.')),fix:'이 시점의 <b>'+((ptList().find(q=>q[0]===V.fixK)||['','점'])[1])+'</b> 올바른 위치를 누르세요. 여기서부터 끝까지 다시 추적합니다.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
 function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disabled';
   return '<div class="cols"><div class="card">'+
    '<div class="row"><label class="btn primary" for="file" tabindex="0">'+(V.has?'다른 영상 선택':'영상 선택')+'</label><input id="file" type="file" accept="video/*" hidden><span class="small muted">카메라를 고정하고 옆에서 찍은 영상. <a href="#guide">촬영 조건 보기</a></span></div>'+
@@ -385,27 +525,69 @@ function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disab
    '<div class="row"><button class="btn sm" type="button" data-nudge="-1"'+dis+'>◀ 1프레임</button><button class="btn sm" type="button" data-nudge="1"'+dis+'>1프레임 ▶</button></div>'+
    '<div class="banner" id="guideLine"></div></div>'+
   '<div class="side"><div class="card"><h2>설정</h2>'+
-   '<div class="step'+(V.has?' done':'')+'"><div class="n">1</div><div class="b"><div class="row"><div class="field" style="flex:2"><label for="fName">동작 이름</label><input id="fName" type="text" maxlength="30" placeholder="예: 스쿼트 스내치" value="'+esc(V.name)+'"></div><div class="field"><label for="fMass">무게(kg, 선택)</label><input id="fMass" type="number" inputmode="decimal" min="0" step="0.1" placeholder="파워 계산용" value="'+esc(V.mass)+'"></div></div>'+
-    '<div class="row"><div class="field"><label for="fSlow">영상 속도</label><select id="fSlow">'+[[1,'실제 속도'],[2,'2배 슬로모션'],[4,'4배 슬로모션'],[8,'8배 슬로모션']].map(o=>'<option value="'+o[0]+'"'+(V.slow===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></div><div class="field"><label for="fRate">분석 간격</label><select id="fRate">'+[[30,'초당 30회'],[60,'초당 60회'],[120,'초당 120회']].map(o=>'<option value="'+o[0]+'"'+(V.rate===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></div></div></div></div>'+
+   '<div class="step done"><div class="n">1</div><div class="b"><div class="row"><div class="field" style="flex:2"><label for="fSport">종목</label><select id="fSport">'+Object.keys(SPORT).map(k=>'<option value="'+k+'"'+(V.sport===k?' selected':'')+'>'+SPORT[k].n+'</option>').join('')+'</select></div>'+(V.sport==='free'?'<div class="field" style="flex:2"><label for="fName">동작 이름</label><input id="fName" type="text" maxlength="30" placeholder="예: 스쿼트 스내치" value="'+esc(V.name)+'"></div>':'')+'</div>'+
+    '<div class="row">'+(V.sport!=='free'?'<div class="field"><label for="fBody">체중(kg)</label><input id="fBody" type="number" inputmode="decimal" min="0" step="0.1" placeholder="파워 계산용" value="'+esc(V.body)+'"></div>':'')+'<div class="field"><label for="fMass">'+SPORT[V.sport].massL+'</label><input id="fMass" type="number" inputmode="decimal" min="0" step="0.1" placeholder="'+(V.sport==='free'?'파워 계산용':'0')+'" value="'+esc(V.mass)+'"></div></div>'+
+    '<div class="row"><div class="field"><label for="fSlow">영상 속도</label><select id="fSlow">'+[[1,'실제 속도'],[2,'2배 슬로모션'],[4,'4배 슬로모션'],[8,'8배 슬로모션']].map(o=>'<option value="'+o[0]+'"'+(V.slow===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></div><div class="field"><label for="fRate">분석 간격</label><select id="fRate">'+[[30,'초당 30회'],[60,'초당 60회'],[120,'초당 120회'],[240,'초당 240회']].map(o=>'<option value="'+o[0]+'"'+(V.rate===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></div></div></div></div>'+
    '<div class="step'+(V.has?' done':'')+'"><div class="n">2</div><div class="b"><div class="row"><b>분석 구간</b><span class="num small muted">'+V.t0.toFixed(2)+' – '+V.t1.toFixed(2)+'초</span></div><div class="row"><button class="btn sm" type="button" id="setT0"'+dis+'>현재 시점을 시작으로</button><button class="btn sm" type="button" id="setT1"'+dis+'>현재 시점을 끝으로</button></div><p class="small muted">동작 직전부터 끝난 직후까지만 잡으면 빠르고 정확합니다.</p></div></div>'+
-   '<div class="step'+(calOk?' done':'')+'"><div class="n">3</div><div class="b"><div class="row"><button class="btn'+(V.mode==='calA'||V.mode==='calB'?' on':'')+'" type="button" id="calBtn"'+dis+'>기준 길이 찍기</button><div class="field" style="max-width:150px"><label for="fCm">실제 길이(cm)</label><input id="fCm" type="number" inputmode="decimal" min="1" step="0.1" value="'+esc(V.cal.cm)+'"></div></div><p class="small muted">길이를 아는 두 점을 찍습니다. 표준 원판 지름은 45cm입니다. 추적할 물체와 카메라에서 같은 거리에 있는 것이어야 합니다.</p></div></div>'+
-   '<div class="step'+(tgOk?' done':'')+'"><div class="n">4</div><div class="b"><div class="row"><div class="field" style="flex:2"><label for="fPreset">추적 구성</label><select id="fPreset">'+Object.keys(PRESET).map(k=>'<option value="'+k+'"'+(V.preset===k?' selected':'')+'>'+PRESET[k].n+'</option>').join('')+'</select></div><div class="field" style="max-width:130px"><label for="fHalf">추적 상자</label><select id="fHalf">'+[[10,'작게'],[16,'보통'],[24,'크게'],[34,'아주 크게']].map(o=>'<option value="'+o[0]+'"'+(V.half===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></div></div>'+
-    '<div class="row"><button class="btn'+(V.mode==='target'?' on':'')+'" type="button" id="tgBtn"'+dis+'>추적할 점 찍기</button></div>'+
+   '<div class="step'+(calOk?' done':'')+'"><div class="n">3</div><div class="b"><div class="row"><button class="btn'+(V.mode==='calA'||V.mode==='calB'?' on':'')+'" type="button" id="calBtn"'+dis+'>기준 길이 찍기</button><div class="field" style="max-width:150px"><label for="fCm">실제 길이(cm)</label><input id="fCm" type="number" inputmode="decimal" min="1" step="0.1" value="'+esc(V.cal.cm)+'"></div></div><p class="small muted">'+SPORT[V.sport].cal+'</p></div></div>'+
+   '<div class="step'+(tgOk?' done':'')+'"><div class="n">4</div><div class="b"><div class="row"><div class="field" style="flex:2"><label for="fPreset">추적 구성</label><select id="fPreset">'+SPORT[V.sport].presets.map(k=>'<option value="'+k+'"'+(V.preset===k?' selected':'')+'>'+PRESET[k].n+'</option>').join('')+'</select></div><div class="field" style="max-width:130px"><label for="fHalf">추적 상자</label><select id="fHalf">'+[[10,'작게'],[16,'보통'],[24,'크게'],[34,'아주 크게']].map(o=>'<option value="'+o[0]+'"'+(V.half===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select></div></div>'+
+    '<div class="row"><button class="btn'+(V.mode==='target'?' on':'')+'" type="button" id="tgBtn"'+dis+'>추적할 점 찍기</button>'+(V.sport==='pullup'?'<button class="btn'+(V.mode==='bar'?' on':'')+'" type="button" id="barBtn"'+dis+'>바 높이 찍기'+(V.bar?' ✓':' (선택)')+'</button>':'')+'</div>'+
     '<div class="chips">'+ptList().map((p,i)=>'<button type="button" class="chip'+(ptPos(p[0])?' done':'')+(V.mode==='target'&&V.tIdx===i?' cur':'')+'" data-tpt="'+i+'"'+dis+'>'+p[1]+(ptPos(p[0])?' ✓':'')+'</button>').join('')+'</div>'+
-    '<p class="small muted">시작 시점 화면에서 찍습니다. 주 추적점은 속도를 잴 물체입니다. 각도용 점은 옷 위에서는 놓치기 쉬우니, 관절에 색 테이프를 붙이거나 무늬가 뚜렷한 곳을 고르세요. 이름을 누르면 그 점만 다시 찍습니다.</p></div></div>'+
+    '<p class="small muted">시작 시점 화면에서 찍습니다. '+SPORT[V.sport].tgt+' 각도용 점은 옷 위에서는 놓치기 쉬우니, 관절에 색 테이프를 붙이거나 무늬가 뚜렷한 곳을 고르세요. 이름을 누르면 그 점만 다시 찍습니다.</p></div></div>'+
    '<div class="step"><div class="n">5</div><div class="b"><div class="row"><button class="btn primary" type="button" id="runBtn"'+(V.has&&calOk&&tgOk&&!V.busy?'':' disabled')+'>분석 시작</button><button class="btn" type="button" id="stopBtn"'+(V.busy?'':' disabled')+'>중지</button><span class="small muted" id="runHint">'+(!V.has?'영상을 먼저 선택하세요.':!calOk?'3번 기준 길이가 필요합니다.':!tgOk?'4번 추적할 점이 필요합니다.':'')+'</span></div></div></div>'+
   '</div>'+resultsHTML()+'</div></div>'}
 function uiState(){const g=$('#guideLine');if(g)g.innerHTML=guideText();const st=$('#stage');if(st)st.classList.toggle('pick',!!V.mode&&V.has&&!V.busy);const sb=$('#stopBtn');if(sb)sb.disabled=!V.busy;const rb=$('#runBtn');if(rb&&V.busy)rb.disabled=true;const sc=$('#scrub');if(sc)sc.disabled=V.busy}
 
 /* ===== 기록·비교 화면 ===== */
-function viewRecords(){const list=S.recs.slice().sort((a,b)=>a.created<b.created?1:-1);if(!list.length)return '<div class="card"><h2>저장한 기록이 없습니다</h2><p class="muted">분석 화면에서 결과가 나오면 <b>기록 저장</b>을 누르세요. 영상은 저장하지 않고 궤적 숫자만 저장합니다.</p><div><a class="btn" href="#analyze" style="text-decoration:none;display:inline-block">분석 화면으로</a></div></div>';
-  if(!S.sel)S.sel=list.slice(0,2).map(r=>r.id);S.sel=S.sel.filter(id=>list.find(r=>r.id===id));
+const delBtn=r=>S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button> <button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>';
+function scatterSVG(pts,xl,yl){const W=380,H=230,L=42,R=14,T=14,B=34;let x0=Math.min.apply(null,pts.map(p=>p.x)),x1=Math.max.apply(null,pts.map(p=>p.x)),y0=0,y1=Math.max.apply(null,pts.map(p=>p.y))*1.15;
+  if(x1-x0<1){x0-=5;x1+=5}const pad=(x1-x0)*.08;x0-=pad;x1+=pad;const X=v=>L+(v-x0)/(x1-x0)*(W-L-R),Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);let s='';
+  for(let k=0;k<=4;k++){const v=y0+(y1-y0)*k/4;s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="var(--line)"/><text x="'+(L-5)+'" y="'+(Y(v)+4)+'" text-anchor="end" font-size="11" fill="var(--muted)">'+v.toFixed(2)+'</text>'}
+  for(let k=0;k<=4;k++){const v=x0+(x1-x0)*k/4;s+='<text x="'+X(v)+'" y="'+(H-12)+'" text-anchor="middle" font-size="11" fill="var(--muted)">'+(+v.toFixed(1))+'</text>'}
+  s+='<text x="'+(W-R)+'" y="'+(H-12)+'" text-anchor="end" dy="-13" font-size="11" fill="var(--muted)">'+xl+'</text><text x="'+(L+4)+'" y="'+(T+10)+'" font-size="11" fill="var(--muted)">'+yl+'</text>';
+  const xs=Array.from(new Set(pts.map(p=>p.x)));if(xs.length>=2){const n=pts.length,mx=pts.reduce((a,p)=>a+p.x,0)/n,my=pts.reduce((a,p)=>a+p.y,0)/n,sxx=pts.reduce((a,p)=>a+(p.x-mx)**2,0),b=pts.reduce((a,p)=>a+(p.x-mx)*(p.y-my),0)/sxx,a=my-b*mx;
+    s+='<line x1="'+X(x0)+'" x2="'+X(x1)+'" y1="'+Y(a+b*x0)+'" y2="'+Y(a+b*x1)+'" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4"/>'}
+  pts.forEach((p,i)=>{const last=i===pts.length-1;s+='<circle cx="'+X(p.x)+'" cy="'+Y(p.y)+'" r="'+(last?6:4.5)+'" fill="'+(last?'var(--accent)':'var(--surface)')+'" stroke="var(--accent)" stroke-width="2"/>'});
+  return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(xl)+'에 따른 '+esc(yl)+'">'+s+'</svg>'}
+function lineSVG(pts,unit){const W=380,H=220,L=42,R=14,T=16,B=30,n=pts.length;let y1=Math.max.apply(null,pts.map(p=>p.v))*1.15,y0=0;const X=i=>n===1?(L+(W-L-R)/2):L+i*(W-L-R)/(n-1),Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);let s='';
+  for(let k=0;k<=4;k++){const v=y0+(y1-y0)*k/4;s+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+Y(v)+'" y2="'+Y(v)+'" stroke="var(--line)"/><text x="'+(L-5)+'" y="'+(Y(v)+4)+'" text-anchor="end" font-size="11" fill="var(--muted)">'+(+v.toFixed(1))+'</text>'}
+  s+='<text x="'+(L+4)+'" y="'+(T+10)+'" font-size="11" fill="var(--muted)">'+unit+'</text><polyline fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" points="'+pts.map((p,i)=>X(i)+','+Y(p.v)).join(' ')+'"/>';
+  const st=Math.ceil(n/6);pts.forEach((p,i)=>{const last=i===n-1;s+='<circle cx="'+X(i)+'" cy="'+Y(p.v)+'" r="'+(last?6:4)+'" fill="'+(last?'var(--accent)':'var(--surface)')+'" stroke="var(--accent)" stroke-width="2"/>';
+    if(i%st===0||last)s+='<text x="'+X(i)+'" y="'+(H-10)+'" text-anchor="'+(n>1&&last?'end':n>1&&i===0?'start':'middle')+'" font-size="11" fill="var(--muted)">'+esc(p.label)+'</text>';if(last)s+='<text x="'+X(i)+'" y="'+(Y(p.v)-11)+'" text-anchor="'+(n>1?'end':'middle')+'" font-size="13" font-weight="700" fill="var(--ink)">'+p.v.toFixed(1)+'</text>'});
+  return '<svg class="chart" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(unit)+' 추이">'+s+'</svg>'}
+function pullRecHTML(list){const ok=list.filter(r=>r.pu),asc=ok.slice().sort((a,b)=>a.created-b.created);let h='<h3>무게별 최고 평균 속도</h3>';
+  h+=asc.length?scatterSVG(asc.map(r=>({x:r.mass||0,y:r.pu.best})),'추가 중량 kg','m/s')+'<p class="small muted">점 하나가 기록 하나이고, 채워진 점이 가장 최근 기록입니다. 같은 추가 중량에서 점이 위로 올라가면 같은 무게를 더 빠르게 든다는 뜻이라 힘이 늘었다고 볼 수 있습니다. 무게가 여러 가지 모이면 점선(하중–속도 직선)이 그려집니다.</p>':'<p class="muted">반복이 인식된 기록이 없습니다.</p>';
+  return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">추가</th><th class="v">반복</th><th class="v">최고 반복</th><th class="v">저하</th><th class="v">이동</th><th></th></tr>'+
+    list.map(r=>{const u=r.pu;return '<tr><td class="num">'+esc(r.date)+'</td><td class="v">'+(r.mass||0)+'kg</td><td class="v">'+(u?u.n+'회':'–')+'</td><td class="v">'+(u?f2(u.best):'–')+'</td><td class="v">'+(u&&u.loss!=null?f0(u.loss)+'%':'–')+'</td><td class="v">'+(u?f0(u.rom*100)+'cm':'–')+'</td><td style="text-align:right;white-space:nowrap">'+delBtn(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">최고 반복은 그날 가장 빠른 반복의 평균 속도(m/s), 저하는 최고 반복 대비 마지막 반복의 속도 저하입니다.</p>'}
+function cmjRecHTML(list){const ok=list.filter(r=>r.cmj&&r.cmj.h!=null),asc=ok.slice().sort((a,b)=>a.created-b.created);let h='<h3>점프 높이 추이</h3>';
+  h+=asc.length?lineSVG(asc.map(r=>({label:r.date.slice(5).replace('-','.'),v:r.cmj.h*100})),'cm')+(asc.some(r=>r.cmj.hSrc==='vel')?'<p class="small muted">체공 시간 없이 골반 속도로 계산한 기록(표에서 참고 표시)은 다른 기록보다 낮게 나오니 함께 비교하지 마세요.</p>':''):'<p class="muted">점프가 인식된 기록이 없습니다.</p>';
+  return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">높이</th><th class="v">반동 깊이</th><th class="v">이륙 속도</th><th class="v">RSImod</th><th></th></tr>'+
+    list.map(r=>{const c=r.cmj||{};return '<tr><td class="num">'+esc(r.date)+(r.mass?'<div class="small muted">+'+r.mass+'kg</div>':'')+'</td><td class="v">'+(c.h!=null?f1(c.h*100)+'cm':'–')+(c.hSrc==='vel'?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+(c.depth!=null?f0(c.depth*100)+'cm':'–')+'</td><td class="v">'+f2(c.vTo)+'</td><td class="v">'+f2(c.rsi)+'</td><td style="text-align:right;white-space:nowrap">'+delBtn(r)+'</td></tr>'}).join('')+'</table></div>'}
+function freeRecHTML(list){if(!S.sel)S.sel=list.slice(0,2).map(r=>r.id);S.sel=S.sel.filter(id=>list.find(r=>r.id===id));
   const sel=S.sel.map(id=>list.find(r=>r.id===id)),series=sel.map((r,i)=>{const k=fromRecord(r),o=Math.max(0,Math.round((k.sum.ascT0-.2)*r.fs));return {t:k.t.slice(o).map(t=>t-k.t[o]),v:k.vy.slice(o),color:COL[i],dash:i?(i===1?'6 4':'2 4'):null,rec:r}});
-  return '<div class="card"><h2>속도 곡선 겹쳐 보기</h2>'+(series.length?chartSVG(series,'m/s',false)+'<div class="row small">'+series.map((s,i)=>'<span><svg width="26" height="8" style="vertical-align:middle"><line x1="0" x2="26" y1="4" y2="4" stroke="'+s.color+'" stroke-width="2.4"'+(s.dash?' stroke-dasharray="'+s.dash+'"':'')+'/></svg> '+esc(s.rec.date)+' '+esc(s.rec.name)+(s.rec.mass?' '+s.rec.mass+'kg':'')+'</span>').join('')+'</div><p class="small muted">수직 속도입니다. 각 기록의 가장 긴 상승 구간이 시작되기 0.2초 전을 0초로 맞췄습니다.</p>':'<p class="muted">아래에서 비교할 기록을 3개까지 고르세요.</p>')+'</div>'+
-  '<div class="card"><h2>기록 '+list.length+'건</h2><div class="tscroll"><table class="mt"><tr><th>비교</th><th>날짜·동작</th><th class="v">최고</th><th class="v">평균</th><th class="v">높이</th><th></th></tr>'+list.map(r=>{const s=r.sum;return '<tr><td><input type="checkbox" id="c_'+r.id+'" data-sel="'+r.id+'"'+(S.sel.includes(r.id)?' checked':'')+' aria-label="'+esc(r.date+' '+r.name)+' 비교에 넣기"></td><td><span class="num">'+esc(r.date)+'</span><div class="small muted">'+esc(r.name)+(r.mass?' · '+r.mass+'kg':'')+(r.ang&&r.ang.length?' · '+r.ang.map(a=>esc(a.n)+' '+a.min+'–'+a.max+'°').join(', '):'')+'</div></td><td class="v">'+f2(s.vPeak)+'</td><td class="v">'+f2(s.meanAsc)+'</td><td class="v">'+f0(s.rom*100)+'cm</td><td style="text-align:right;white-space:nowrap">'+(S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button> <button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>')+'</td></tr>'}).join('')+'</table></div><p class="small muted">최고·평균은 상승 속도(m/s)입니다. 같은 동작이라도 촬영 각도와 기준 길이를 찍은 방식이 다르면 수치가 달라집니다.</p></div>'}
+  return '<h3>속도 곡선 겹쳐 보기</h3>'+(series.length?chartSVG(series,'m/s',false)+'<div class="row small">'+series.map((s,i)=>'<span><svg width="26" height="8" style="vertical-align:middle"><line x1="0" x2="26" y1="4" y2="4" stroke="'+s.color+'" stroke-width="2.4"'+(s.dash?' stroke-dasharray="'+s.dash+'"':'')+'/></svg> '+esc(s.rec.date)+' '+esc(s.rec.name)+(s.rec.mass?' '+s.rec.mass+'kg':'')+'</span>').join('')+'</div><p class="small muted">수직 속도입니다. 각 기록의 가장 긴 상승 구간이 시작되기 0.2초 전을 0초로 맞췄습니다.</p>':'<p class="muted">아래에서 비교할 기록을 3개까지 고르세요.</p>')+
+  '<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>비교</th><th>날짜·동작</th><th class="v">최고</th><th class="v">평균</th><th class="v">높이</th><th></th></tr>'+list.map(r=>{const s=r.sum;return '<tr><td><input type="checkbox" id="c_'+r.id+'" data-sel="'+r.id+'"'+(S.sel.includes(r.id)?' checked':'')+' aria-label="'+esc(r.date+' '+r.name)+' 비교에 넣기"></td><td><span class="num">'+esc(r.date)+'</span><div class="small muted">'+esc(r.name)+(r.mass?' · '+r.mass+'kg':'')+(r.ang&&r.ang.length?' · '+r.ang.map(a=>esc(a.n)+' '+a.min+'–'+a.max+'°').join(', '):'')+'</div></td><td class="v">'+f2(s.vPeak)+'</td><td class="v">'+f2(s.meanAsc)+'</td><td class="v">'+f0(s.rom*100)+'cm</td><td style="text-align:right;white-space:nowrap">'+(S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button> <button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>')+'</td></tr>'}).join('')+'</table></div><p class="small muted">최고·평균은 상승 속도(m/s)입니다. 같은 동작이라도 촬영 각도와 기준 길이를 찍은 방식이 다르면 수치가 달라집니다.</p>'}
+
+
+function viewRecords(){const all=S.recs.slice().sort((a,b)=>a.created<b.created?1:-1);if(!all.length)return '<div class="card"><h2>저장한 기록이 없습니다</h2><p class="muted">분석 화면에서 결과가 나오면 <b>기록 저장</b>을 누르세요. 영상은 저장하지 않고 궤적 숫자만 저장합니다.</p><div><a class="btn" href="#analyze" style="text-decoration:none;display:inline-block">분석 화면으로</a></div></div>';
+  const sp=S.rsp||V.sport,list=all.filter(r=>(r.sport||'free')===sp),cnt=k=>all.filter(r=>(r.sport||'free')===k).length;
+  let h='<div class="card"><div class="row"><h2>기록</h2><div class="field" style="max-width:230px;margin-left:auto"><label for="fRecSport">종목</label><select id="fRecSport">'+Object.keys(SPORT).map(k=>'<option value="'+k+'"'+(sp===k?' selected':'')+'>'+SPORT[k].n+' ('+cnt(k)+')</option>').join('')+'</select></div></div>';
+  if(!list.length)return h+'<p class="muted">이 종목으로 저장한 기록이 없습니다.</p></div>';
+  return h+(sp==='pullup'?pullRecHTML(list):sp==='cmj'?cmjRecHTML(list):freeRecHTML(list))+'</div>'}
 
 /* ===== 방법 화면 ===== */
-function viewGuide(){return '<div class="card"><h2>촬영 조건</h2><div class="prose"><ul>'+
+function viewGuide(){return '<div class="card"><h2>중량 풀업 촬영·측정</h2><div class="prose"><ul>'+
+ '<li><b>카메라</b> 몸 옆에서 바와 몸 전체가 들어오게 고정합니다. 높이는 가슴~바 사이가 좋습니다.</li>'+
+ '<li><b>기준 길이</b> 벨트에 단 원판의 지름(범퍼·20kg 원판은 보통 45cm)이 몸과 같은 거리에 있어 가장 좋습니다.</li>'+
+ '<li><b>추적점</b> 턱 끝. 작은 스티커를 붙이면 안정적입니다. 바 높이를 찍으면 반복마다 턱이 바를 넘었는지 판정합니다. 팔꿈치 각도를 고르면 매 반복 끝까지 내려왔는지도 봅니다.</li>'+
+ '<li><b>보는 지표</b> 반복별 평균 속도(올린 거리 ÷ 시간)와 속도 저하. 같은 추가 중량에서 평균 속도가 오르면 힘이 늘었다는 신호입니다. 기록 화면에서 무게별 최고 평균 속도를 모아 봅니다.</li></ul></div></div>'+
+ '<div class="card"><h2>CMJ 촬영·측정</h2><div class="prose"><ul>'+
+ '<li><b>카메라</b> 몸 옆, 무릎~허리 높이에 고정합니다. 발끝이 바닥에 닿아 있는 모습이 잘 보여야 이륙·착지를 잡을 수 있습니다.</li>'+
+ '<li><b>프레임</b> 120~240fps 슬로모션을 권합니다. 30fps는 1프레임이 33ms라 높이 오차가 4~5cm까지 커집니다. 슬로모션 파일이면 1번의 영상 속도를 맞춰 주세요.</li>'+
+ '<li><b>자세</b> 손은 허리에 고정하고 매번 같은 방식으로 뜁니다. 시작 전 0.5초 이상 가만히 서 있고, 분석 구간 시작을 그 시점에 둡니다. 착지할 때 무릎을 편 채 발끝부터 닿아야 체공 시간 높이가 맞습니다.</li>'+
+ '<li><b>추적점</b> 골반 옆(허리 벨트나 테이프)과 신발 앞코. 무릎·발목까지 찍으면 반동 때 무릎 각도도 나옵니다.</li>'+
+ '<li><b>보는 지표</b> 점프 높이(체공 시간), 반동 깊이, 이륙까지 시간, RSImod(높이 ÷ 이륙까지 시간). RSImod는 같은 높이를 더 짧은 시간에 만들수록 커집니다.</li></ul></div></div>'+
+ '<div class="card"><h2>공통 촬영 조건</h2><div class="prose"><ul>'+
  '<li><b>카메라 고정</b> 삼각대나 받침에 세워 둡니다. 손으로 들고 찍으면 카메라 흔들림이 그대로 속도로 계산됩니다.</li>'+
  '<li><b>옆에서 직각으로</b> 움직임이 화면과 평행해야 합니다. 비스듬하면 이동 거리와 속도가 실제보다 작게 나옵니다.</li>'+
  '<li><b>기준 길이</b> 추적할 물체와 카메라에서 같은 거리에 있어야 합니다. 바벨이라면 카메라 쪽 원판의 지름(45cm)이 가장 좋습니다. 더 가깝거나 먼 물체로 재면 그 비율만큼 속도가 틀어집니다.</li>'+
@@ -418,7 +600,9 @@ function viewGuide(){return '<div class="card"><h2>촬영 조건</h2><div class=
  '<li><b>파워</b> 무게×(중력가속도+수직 가속도)×수직 속도입니다. 바벨에 전달된 일률이며 몸 전체의 파워가 아닙니다. 가속도는 영상에서 두 번 미분한 값이라 오차가 큽니다. 간이 파워(무게×중력×최고 속도)는 일부 앱이 쓰는 방식으로, 서로 비교할 때는 같은 정의끼리만 비교하세요.</li>'+
  '<li><b>구간</b> 수직 속도가 0.08 m/s를 넘는 연속 구간을 상승·하강으로 나눕니다.</li>'+
  '<li><b>관절 각도</b> 추적 구성에서 각도용 점을 더하면 세 점이 이루는 각을 시간에 따라 구합니다. 자세 인식이 아니라 찍은 점을 따라가는 방식이라, 점을 어디에 찍었는지에 따라 값이 달라지고 옷 위의 점은 밀릴 수 있습니다.</li>'+
- '<li><b>반복</b> 가장 큰 상승의 80% 이상 올라간 상승 구간을 한 번으로 셉니다. 두 번 이상이면 반복별 속도와 속도 저하를 보여 줍니다.</li></ul>'+
+ '<li><b>반복</b> 가장 큰 상승의 80% 이상 올라간 상승 구간을 한 번으로 셉니다(기타 종목). 풀업은 50% 이상을 반복으로 세고 90% 미만은 짧은 반복으로 표시합니다.</li>'+
+ '<li><b>풀업 평균 속도</b> 속도가 0에서 올라가기 시작해 다시 0이 될 때까지의 올림 구간 전체로 계산합니다. 평균 파워는 (체중+추가 중량)×중력×이동 거리÷올린 시간입니다.</li>'+
+ '<li><b>CMJ 높이</b> 체공 시간 t로 g×t²÷8. 이륙·착지는 발끝이 바닥에서 1.5cm·3cm를 지나는 시각으로 바닥에서 떨어지고 닿는 순간을 추정합니다. Sayers 추정 파워는 60.7×높이(cm)+45.3×체중(kg)−2055 공식(Sayers 외, 1999)입니다. 움직임 시작은 골반이 0.05 m/s보다 빠르게 내려가기 시작한 시점이라, 힘판으로 잰 값과는 다를 수 있습니다.</li></ul>'+
  '<p><b>한계</b></p><ul><li>화면에 보이는 평면 안의 움직임만 잽니다. 카메라 쪽으로 다가오거나 멀어지는 움직임은 보이지 않습니다.</li><li>기준 길이를 찍을 때 1~2픽셀 어긋나면 속도가 수 퍼센트 달라집니다. 같은 조건에서 찍은 본인 기록끼리 비교하는 용도가 가장 믿을 만합니다.</li><li>관절을 스스로 찾아 주는 자세 인식은 들어 있지 않습니다. 각도는 직접 찍은 점으로 구합니다.</li><li>영상은 이 기기 안에서만 처리하며 어디에도 올리지 않습니다. 저장하는 것은 궤적 숫자입니다.</li></ul></div></div>'}
 
 /* ===== 그리기와 이벤트 ===== */
@@ -428,13 +612,16 @@ function render(){const v=S.view;document.querySelectorAll('nav.tabs a').forEach
 function refresh(){whereUI();if(S.view==='records')render()}
 function route(){if(V.busy){V.abort=true}stopPlay();const h=(location.hash||'').replace('#','');S.view=['analyze','records','guide'].includes(h)?h:'analyze';S.delAsk=null;render();window.scrollTo(0,0)}
 window.addEventListener('hashchange',route);
-function clearTrack(){V.track=null;V.res=null}
+function clearTrack(){V.track=null;V.res=null;V.rep=null;V.man={}}
 let softT;function softUpdate(){clearTimeout(softT);softT=setTimeout(()=>{if(S.view!=='analyze'||V.busy)return;reanalyze();const old=document.getElementById('results'),h=resultsHTML();if(old)old.outerHTML=h;else if(h){const side=document.querySelector('.side');if(side)side.insertAdjacentHTML('beforeend',h)}paint()},300)}
 document.addEventListener('click',async e=>{const t=e.target.closest('button,[data-del]');if(!t)return;
   if(t.id==='playBtn')play();
   else if(t.dataset.nudge){stopPlay();setCur(V.cur+(+t.dataset.nudge)/Math.max(30,V.rate))}
   else if(t.id==='setT0'){V.t0=Math.min(V.cur,V.t1-.2);if(V.t0<0)V.t0=0;V.target=null;V.extra={};clearTrack();render()}
   else if(t.id==='setT1'){V.t1=Math.max(V.cur,V.t0+.2);clearTrack();render()}
+  else if(t.id==='barBtn'){stopPlay();V.mode=V.mode==='bar'?null:'bar';render()}
+  else if(t.id==='setTo'||t.id==='setLd'){stopPlay();V.man[t.id==='setTo'?'to':'ld']=V.cur;reanalyze();render()}
+  else if(t.id==='manReset'){V.man={};reanalyze();render()}
   else if(t.id==='calBtn'){stopPlay();V.mode=V.mode==='calA'||V.mode==='calB'?null:'calA';render()}
   else if(t.id==='tgBtn'){stopPlay();if(V.mode==='target'){V.mode=null;render()}else{const nx=ptList().findIndex(q=>!ptPos(q[0]));V.tIdx=nx<0?0:nx;V.mode='target';await setCur(V.t0);render()}}
   else if(t.dataset.tpt){stopPlay();V.tIdx=+t.dataset.tpt;V.mode='target';await setCur(V.t0);render()}
@@ -442,7 +629,9 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
   else if(t.id==='runBtn'){runTrack(null)}
   else if(t.id==='stopBtn'){V.abort=true}
   else if(t.id==='saveBtn'){const r=V.res;if(!r||!V.has)return;const r3=a=>a.map(v=>Math.round(v*1000)/1000),s=Object.assign({},r.sum);
-    const rec={id:'mv_'+Date.now().toString(36),date:today(),name:(V.name||'이름 없는 동작').slice(0,30),mass:parseFloat(V.mass)||0,fs:r.fs,slow:V.slow,X:r3(resample(r.t,r.X,Math.min(r.fs,60))),Y:r3(resample(r.t,r.Y,Math.min(r.fs,60))),sum:s,ang:r.angles.map(a=>({n:a.n,min:Math.round(a.min),max:Math.round(a.max)})),created:Date.now(),v:2};rec.fs=Math.min(r.fs,60);
+    const rec={id:'mv_'+Date.now().toString(36),date:today(),name:(V.sport==='free'?(V.name||'이름 없는 동작'):SPORT[V.sport].n).slice(0,30),sport:V.sport,body:parseFloat(V.body)||0,mass:parseFloat(V.mass)||0,fs:r.fs,slow:V.slow,win:V.sport==='cmj'?.03:.06,X:r3(resample(r.t,r.X,Math.min(r.fs,60))),Y:r3(resample(r.t,r.Y,Math.min(r.fs,60))),sum:s,ang:r.angles.map(a=>({n:a.n,min:Math.round(a.min),max:Math.round(a.max)})),created:Date.now(),v:3};rec.fs=Math.min(r.fs,60);
+    const R=V.rep,rd=v=>v==null?null:Math.round(v*1000)/1000;if(V.sport==='pullup'&&R&&R.sum)rec.pu=Object.assign({},R.sum,{reps:R.reps.map(q=>({rom:rd(q.rom),T:rd(q.T),mean:rd(q.mean),peak:rd(q.peak)}))});
+    if(V.sport==='cmj'&&R)rec.cmj={h:rd(R.h),hSrc:R.hSrc,T:rd(R.T),depth:rd(R.depth),vTo:rd(R.vTo),ttt:rd(R.ttt),rsi:rd(R.rsi),pp:R.pp==null?null:Math.round(R.pp),sayers:R.sayers==null?null:Math.round(R.sayers),knee:R.knee==null?null:Math.round(R.knee),hDisp:rd(R.hDisp)};
     t.disabled=true;const res=await Store.save(rec);if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}toast(res==='cloud'?'계정에 저장했습니다.':'이 브라우저에 저장했습니다.');S.sel=null;location.hash='#records'}
   else if(t.dataset.del){S.delAsk=t.dataset.del;render()}
   else if(t.dataset.delno){S.delAsk=null;render()}
@@ -450,13 +639,16 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
 });
 document.addEventListener('change',async e=>{const t=e.target;
   if(t.id==='file'&&t.files&&t.files[0])await loadFile(t.files[0]);
+  else if(t.id==='fSport'){V.sport=t.value;const sd=SPORT[V.sport];V.preset=sd.presets[0];V.extra={};V.bar=null;V.man={};V.mode=null;V.fixK='main';V.rate=sd.rate;if(V.chart==='ang')V.chart='vy';if(V.has){if(!V.cal.a)V.cal.cm=sd.cm;V.target=null;clearTrack();render()}else{setDemo();render()}}
+  else if(t.id==='fBody'){V.body=t.value;softUpdate()}
+  else if(t.id==='fRecSport'){S.rsp=t.value;S.sel=null;S.delAsk=null;render()}
   else if(t.id==='fSlow'){V.slow=+t.value;if(V.has){reanalyze();render()}}
   else if(t.id==='fRate'){V.rate=+t.value;if(V.has){clearTrack();render()}}
   else if(t.id==='fPreset'){V.preset=t.value;V.extra={};V.mode=null;V.fixK='main';if(V.chart==='ang')V.chart='vy';if(V.has){clearTrack();render()}else render()}
   else if(t.id==='fixSel'){V.fixK=t.value;uiState()}
   else if(t.id==='fHalf'){V.half=+t.value;if(V.has){clearTrack();render()}else paint()}
   else if(t.id==='fCm'){const v=parseFloat(t.value);if(v>0){V.cal.cm=v;if(V.has)softUpdate();else paint()}}
-  else if(t.id==='fMass'){V.mass=t.value;if(V.has)softUpdate()}
+  else if(t.id==='fMass'){V.mass=t.value;softUpdate()}
   else if(t.id==='chartSel'){V.chart=t.value;render()}
   else if(t.dataset.sel){const id=t.dataset.sel;if(t.checked){if(S.sel.length>=3){t.checked=false;toast('3개까지 비교할 수 있습니다.');return}S.sel.push(id)}else S.sel=S.sel.filter(x=>x!==id);render()}
 });
