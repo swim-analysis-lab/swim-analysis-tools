@@ -461,7 +461,7 @@ function viewMeasure(){if(!S.draft)S.draft=newDraftFromExample();const d=S.draft
   '<div class="card editor">'+
     (d.ex?'<div class="banner">지금 보이는 것은 예시 그림입니다. 내 측면 사진을 선택하면 바뀝니다.</div>':'')+
     '<div class="row"><label class="btn primary pick">'+(d.ex?'측면 사진 선택':'다른 사진으로 바꾸기')+'<input id="file" type="file" accept="image/*" aria-label="'+(d.ex?'측면 사진 선택':'다른 사진으로 바꾸기')+'"></label>'+
-    '<span class="small muted">정측면, 전신, 카메라는 허리 높이. <a href="#guide">촬영 조건 보기</a></span><p class="small muted" style="flex-basis:100%">눌러도 반응이 없으면 앱 안 브라우저라서 그렇습니다. 오른쪽 위 ⋮ 메뉴에서 <b>Chrome(또는 삼성 인터넷)에서 열기</b>를 눌러 주세요.</p></div>'+
+    '<span class="small muted">정측면, 전신, 카메라는 허리 높이. <a href="#guide">촬영 조건 보기</a></span></div>'+
     '<div class="stagebox"><div class="stage" id="stage"><img id="stageImg" src="'+d.photo+'" alt="마킹할 측면 사진"><svg id="stageSvg" viewBox="0 0 '+d.W+' '+d.H+'" preserveAspectRatio="none"></svg><canvas id="loupe" width="256" height="256"></canvas></div></div>'+
     '<div id="guideLine" class="banner"></div>'+
     '<div class="chips" id="chips"></div>'+
