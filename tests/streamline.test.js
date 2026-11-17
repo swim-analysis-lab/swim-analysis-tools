@@ -1,6 +1,6 @@
 const fs=require('fs');const html=fs.readFileSync(require('path').join(__dirname,'../streamline/index.html'),'utf8');
 const core=html.match(/<script id="core">([\s\S]*?)<\/script>/)[1];
-const ctx={};new Function('ctx',core+';Object.assign(ctx,{computeMetrics,rate,rateAll,verdict,normSkeleton,recommend,EX,METRICS,PTS});')(ctx);
+const ctx={};new Function('ctx',core+';Object.assign(ctx,{computeMetrics,rate,rateAll,verdict,normSkeleton,recommend,EX,METRICS,PTS,MODES,ptsFor});')(ctx);
 const {computeMetrics,rateAll,recommend,verdict,EX}=ctx;
 let fail=0;const near=(n,a,b,t=0.6)=>{const ok=Math.abs(a-b)<=t;if(!ok)fail++;console.log((ok?'ok  ':'FAIL')+' '+n+': '+a.toFixed(2)+' vs '+b)};
 // 좌표: W=H=1000, 배가 오른쪽. 완전 일자(수직)
@@ -46,4 +46,32 @@ EXP.forEach(e=>{const mm=computeMetrics(e.pts,600,1000,'right');console.log(e.id
 const A=computeMetrics(EXP[0].pts,600,1000,'right'),B=computeMetrics(EXP[1].pts,600,1000,'right');console.log('verdicts',['line','shoulder','elbow','head','hip','arch'].map(k=>k+':'+verdict(k,A[k],B[k])).join(' '));
 // 완전 일자 → 유지 추천
 console.log('straight rec:',recommend(computeMetrics(st,1000,1000,'right'),{}).findings[0].title);
+
+// ===== 상체 모드 =====
+{const {MODES,ptsFor,normSkeleton}=ctx;let uf=0;const chk=(n,c)=>{if(!c){fail++;uf++}console.log((c?'ok  ':'FAIL')+' '+n)};
+const up={wrist:st.wrist,elbow:st.elbow,shoulder:st.shoulder,ear:st.ear,hip:st.hip};
+let u=computeMetrics(up,1000,1000,'right','upper');
+chk('upper ok with 5 pts',u.ok&&u.mode==='upper');
+chk('upper no line/knee/wrist/hip',u.line==null&&u.knee==null&&u.wrist==null&&u.hip==null);
+near('upper straight shoulder',u.shoulder,0);near('upper straight upLine',u.upLine,0);
+chk('full still needs 8',computeMetrics(up,1000,1000,'right').missing.length===3);
+chk('upper missing ear',computeMetrics({...up,ear:undefined},1000,1000,'right','upper').missing.join()==='ear');
+// 같은 팔 20° 자세: 전신·상체 모드 값 일치
+const a20u={wrist:a20.wrist,elbow:a20.elbow,shoulder:a20.shoulder,ear:a20.ear,hip:a20.hip,finger:a20.finger};
+const fm=computeMetrics(a20,1000,1000,'right'),um=computeMetrics(a20u,1000,1000,'right','upper');
+near('upper=full shoulder',um.shoulder,fm.shoulder,0.01);near('upper=full elbow',um.elbow,fm.elbow,0.01);near('upper=full wrist',um.wrist,fm.wrist,0.01);near('upper=full head',um.head,fm.head,0.01);near('upper=full upLine',um.upLine,fm.upLine,0.01);
+chk('upLine>0 when arm fwd',um.upLine>1);
+// 허벅지 점으로 골반 각: 상체 10° 숙임
+const h10u={wrist:h10.wrist,elbow:h10.elbow,shoulder:h10.shoulder,ear:h10.ear,hip:h10.hip,thigh:[.5,.69]};
+near('upper hip via thigh',computeMetrics(h10u,1000,1000,'right','upper').hip,10);
+// 사진 회전 불변 + 기울기 경고
+const r7u=Object.fromEntries(Object.entries(a20u).map(([k,p])=>[k,rot(p,[.5,.5],7)]));u=computeMetrics(r7u,1000,1000,'right','upper');near('upper rotated shoulder',u.shoulder,20);chk('upper tilt detected',u.tilt>3);
+// 추천: hip 없을 때 오류 없이 동작
+const rr=recommend(computeMetrics(a20u,1000,1000,'right','upper'),{});chk('upper recommend runs',rr.findings.length>0&&rr.routine.length>0);
+const rs=recommend(computeMetrics(up,1000,1000,'right','upper'),{});chk('upper straight rec text',/상체 모드/.test(rs.findings[0].text));
+// 상체 정규화 골격
+const sk=normSkeleton(a20u,1000,1000,'right',true);near('upper skel hip origin',Math.hypot(...sk.hip),0,1e-9);chk('upper skel no ankle',!sk.ankle);
+chk('ptsFor upper order',ptsFor('upper')[0].k==='wrist'&&ptsFor('upper').find(p=>p.k==='finger').opt===true);
+chk('ptsFor full has 12',ptsFor('full').length===12&&ptsFor().length===12);
+console.log('upper-mode checks',uf?'FAIL':'ok');}
 console.log(fail?('\n'+fail+' FAILED'):'\nALL PASS');process.exit(fail?1:0);
