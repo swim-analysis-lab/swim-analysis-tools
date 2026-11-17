@@ -396,7 +396,7 @@ function demoCmj(){const fs=120,px=300,vto=2.6,T=2*vto/9.81,tTo=1.15,tLd=tTo+T,y
   const Y=t=>t<.4?0:t<.85?-.30*smo((t-.4)/.45):t<tTo?herm(t,.85,tTo,-.30,yTo,0,vto):t<tLd?yTo+vto*(t-tTo)-4.905*(t-tTo)**2:t<tLd+.3?herm(t,tLd,tLd+.3,yTo,-.15,-vto,0):-.15+.15*smo((t-tLd-.3)/.5);
   for(let i=0;i<=(tLd+.9)*fs;i++){const t=i/fs,y=Y(t);tr.t.push(t);tr.x.push(200);tr.y.push(420-y*px);tr.c.push(1);const rise=t>tTo&&t<tLd?y-yTo:0;tr.P.toe.x.push(232);tr.P.toe.y.push(655-rise*px);tr.P.toe.c.push(1)}
   return {tr,cal:[[340,655],[340,355]],cm:100,bar:null,cur:1.42}}
-function setDemo(){V.has=false;V.slow=1;V.target=null;V.extra={};V.man={};V.mode=null;V.preset=SPORT[V.sport].presets[0];
+function setDemo(){resetUndo();V.has=false;V.slow=1;V.target=null;V.extra={};V.man={};V.mode=null;V.preset=SPORT[V.sport].presets[0];
   const d=V.sport==='pullup'?demoPull():V.sport==='cmj'?demoCmj():{tr:demoTrack(),cal:[[190,650],[190,515]],cm:45,bar:null,cur:1};
   V.track=d.tr;V.dur=d.tr.t[d.tr.t.length-1];V.cw=405;V.ch=720;V.t0=0;V.t1=V.dur;V.cur=d.cur;V.cal={a:d.cal[0],b:d.cal[1],cm:d.cm};V.bar=d.bar;reanalyze()}
 const pxPerM=()=>{const c=V.cal;return c.a&&c.b&&c.cm>0?Math.hypot(c.a[0]-c.b[0],c.a[1]-c.b[1])/(c.cm/100):null};
@@ -426,7 +426,7 @@ async function loadFile(file){stopPlay();if(vid.src&&vid.src.indexOf('blob:')===
   try{await once(vid,'loadedmetadata')}catch(e){toast('이 영상은 브라우저에서 열 수 없습니다. MP4(H.264)로 다시 시도해 주세요.');return}
   const vw=vid.videoWidth,vh=vid.videoHeight,sc=Math.min(1,720/Math.max(vw,vh));if(!vw||!isFinite(vid.duration)){toast('영상 정보를 읽지 못했습니다.');return}
   V.cw=Math.round(vw*sc);V.ch=Math.round(vh*sc);wk.width=V.cw;wk.height=V.ch;wctx=wk.getContext('2d',{willReadFrequently:true});
-  V.has=true;V.dur=vid.duration;V.t0=0;V.t1=Math.min(V.dur,30);V.cur=0;V.track=null;V.res=null;V.rep=null;V.target=null;V.extra={};V.bar=null;V.man={};V.cal={a:null,b:null,cm:V.cal.cm||SPORT[V.sport].cm};V.mode=null;
+  resetUndo();V.has=true;V.dur=vid.duration;V.t0=0;V.t1=Math.min(V.dur,30);V.cur=0;V.track=null;V.res=null;V.rep=null;V.target=null;V.extra={};V.bar=null;V.man={};V.cal={a:null,b:null,cm:V.cal.cm||SPORT[V.sport].cm};V.mode=null;
   try{await vid.play();vid.pause()}catch(e){}
   try{if(vid.readyState<2)await once(vid,'loadeddata',6000)}catch(e){}
   await seekTo(0);grab();render()}
@@ -518,11 +518,11 @@ function bindStage(){const st=$('#stage');if(!st)return;let down=false;
   st.addEventListener('pointerdown',e=>{if(!V.mode||!V.has||V.busy)return;down=true;try{st.setPointerCapture(e.pointerId)}catch(x){}const [x,y,b]=cvPos(e);V.tmp=[x,y];paint();loupeAt(V.tmp,b);e.preventDefault()});
   st.addEventListener('pointermove',e=>{if(!down)return;const [x,y,b]=cvPos(e);V.tmp=[x,y];paint();loupeAt(V.tmp,b)});
   const up=()=>{if(!down)return;down=false;$('#loupe').style.display='none';const p=V.tmp.map(v=>Math.round(v*10)/10);V.tmp=null;
-    if(V.mode==='calA'){V.cal.a=p;V.cal.b=null;V.mode='calB'}
-    else if(V.mode==='calB'){if(Math.hypot(p[0]-V.cal.a[0],p[1]-V.cal.a[1])<8){toast('두 점이 너무 가깝습니다. 반대쪽 끝을 다시 눌러 주세요.');paint();return}V.cal.b=p;V.mode=null;reanalyze()}
-    else if(V.mode==='bar'){V.bar=p;V.mode=null;reanalyze()}
-    else if(V.mode==='target'){const k=ptList()[V.tIdx][0];if(k==='main')V.target=p;else V.extra[k]=p;V.track=null;V.res=null;const nx=ptList().findIndex(q=>!ptPos(q[0]));if(nx>=0)V.tIdx=nx;else V.mode=null}
-    else if(V.mode==='fix'){V.mode=null;runTrack({t:V.cur,k:V.fixK,x:p[0],y:p[1]});return}
+    if(V.mode==='calA'){remember('기준 길이 첫 점');V.cal.a=p;V.cal.b=null;V.mode='calB'}
+    else if(V.mode==='calB'){if(Math.hypot(p[0]-V.cal.a[0],p[1]-V.cal.a[1])<8){toast('두 점이 너무 가깝습니다. 반대쪽 끝을 다시 눌러 주세요.');paint();return}remember('기준 길이 끝점');V.cal.b=p;V.mode=null;reanalyze()}
+    else if(V.mode==='bar'){remember('바 높이');V.bar=p;V.mode=null;reanalyze()}
+    else if(V.mode==='target'){const k=ptList()[V.tIdx][0];remember(ptName(k)+(ptPos(k)?' 위치 변경':' 찍기'));if(k==='main')V.target=p;else V.extra[k]=p;V.track=null;V.res=null;const nx=ptList().findIndex(q=>!ptPos(q[0]));if(nx>=0)V.tIdx=nx;else V.mode=null}
+    else if(V.mode==='fix'){V.mode=null;remember(ptName(V.fixK)+' 추적 고침');runTrack({t:V.cur,k:V.fixK,x:p[0],y:p[1]});return}
     render()};
   st.addEventListener('pointerup',up);st.addEventListener('pointercancel',()=>{down=false;V.tmp=null;const l=$('#loupe');if(l)l.style.display='none';paint()})}
 
@@ -611,6 +611,7 @@ function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disab
    '<div class="stagebox"><div class="stage" id="stage"><canvas id="cv" width="'+V.cw+'" height="'+V.ch+'"></canvas><canvas id="loupe" width="256" height="256"></canvas></div></div>'+
    '<div class="row"><button class="btn sm" type="button" id="playBtn">재생</button><div style="flex:1;min-width:120px"><label for="scrub" class="small muted" style="display:none">시점</label><input id="scrub" type="range" min="0" max="'+V.dur+'" step="0.005" value="'+V.cur+'" aria-label="영상 시점"></div><span class="small num muted" id="tlabel"></span></div>'+
    '<div class="row"><button class="btn sm" type="button" data-nudge="-10"'+dis+'>◀◀ 10</button><button class="btn sm" type="button" data-nudge="-1"'+dis+'>◀ 1</button><button class="btn sm" type="button" data-nudge="1"'+dis+'>1 ▶</button><button class="btn sm" type="button" data-nudge="10"'+dis+'>10 ▶▶</button><span class="small muted">프레임 이동</span></div>'+
+   (V.has?'<div class="row"><button class="btn sm" type="button" id="undoBtn"'+(UH.u.length?'':' disabled')+' title="Ctrl+Z">되돌리기</button><button class="btn sm" type="button" id="redoBtn"'+(UH.r.length?'':' disabled')+' title="Ctrl+Shift+Z">다시 실행</button><span class="small muted">'+(UH.u.length?'되돌릴 작업: '+esc(UH.u[UH.u.length-1].label):'점·구간을 바꾸면 되돌릴 수 있습니다')+'</span></div>':'')+
    '<div class="banner" id="guideLine"></div></div>'+
   '<div class="side"><div class="card"><h2>설정</h2>'+
    '<div class="step done"><div class="n">1</div><div class="b"><div class="row"><div class="field" style="flex:2"><label for="fSport">종목</label><select id="fSport">'+Object.keys(SPORT).map(k=>'<option value="'+k+'"'+(V.sport===k?' selected':'')+'>'+SPORT[k].n+'</option>').join('')+'</select></div>'+(V.sport==='free'?'<div class="field" style="flex:2"><label for="fName">동작 이름</label><input id="fName" type="text" maxlength="30" placeholder="예: 스쿼트 스내치" value="'+esc(V.name)+'"></div>':'')+'</div>'+
@@ -624,7 +625,7 @@ function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disab
     '<p class="small muted">시작 시점 화면에서 찍습니다. '+SPORT[V.sport].tgt+' 각도용 점은 옷 위에서는 놓치기 쉬우니, 관절에 색 테이프를 붙이거나 무늬가 뚜렷한 곳을 고르세요. 이름을 누르면 그 점만 다시 찍습니다.</p></div></div>'+
    '<div class="step"><div class="n">5</div><div class="b"><div class="row"><button class="btn primary" type="button" id="runBtn"'+(V.has&&calOk&&tgOk&&!V.busy?'':' disabled')+'>분석 시작</button><button class="btn" type="button" id="stopBtn"'+(V.busy?'':' disabled')+'>중지</button><span class="small muted" id="runHint">'+(!V.has?'영상을 먼저 선택하세요.':!calOk?'3번 기준 길이가 필요합니다.':!tgOk?'4번 추적할 점이 필요합니다.':'')+'</span></div></div></div>'+
   '</div>'+resultsHTML()+'</div></div>'}
-function uiState(){const g=$('#guideLine');if(g)g.innerHTML=guideText();const st=$('#stage');if(st)st.classList.toggle('pick',!!V.mode&&V.has&&!V.busy);const sb=$('#stopBtn');if(sb)sb.disabled=!V.busy;const rb=$('#runBtn');if(rb&&V.busy)rb.disabled=true;const sc=$('#scrub');if(sc)sc.disabled=V.busy}
+function uiState(){const ub=$('#undoBtn');if(ub)ub.disabled=V.busy||!UH.u.length;const rd=$('#redoBtn');if(rd)rd.disabled=V.busy||!UH.r.length;const g=$('#guideLine');if(g)g.innerHTML=guideText();const st=$('#stage');if(st)st.classList.toggle('pick',!!V.mode&&V.has&&!V.busy);const sb=$('#stopBtn');if(sb)sb.disabled=!V.busy;const rb=$('#runBtn');if(rb&&V.busy)rb.disabled=true;const sc=$('#scrub');if(sc)sc.disabled=V.busy}
 
 /* ===== 기록·비교 화면 ===== */
 const delBtn=r=>S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button> <button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>';
@@ -729,20 +730,32 @@ function refresh(){whereUI();if(S.view==='records')render()}
 function route(){if(V.busy){V.abort=true}stopPlay();const h=(location.hash||'').replace('#','');S.view=['analyze','records','guide'].includes(h)?h:'analyze';S.delAsk=null;render();window.scrollTo(0,0)}
 window.addEventListener('hashchange',route);
 function clearTrack(){V.track=null;V.res=null;V.rep=null;V.man={}}
+/* 되돌리기: 점·구간·설정을 바꾸기 직전 상태를 쌓아 둠. 추적 결과는 새로 만들어지므로 참조만 보관 */
+const UH={u:[],r:[]};
+const cp=a=>a?a.slice():a;
+function snapV(){const ex={};Object.keys(V.extra).forEach(k=>ex[k]=cp(V.extra[k]));return {sport:V.sport,preset:V.preset,rate:V.rate,half:V.half,fixK:V.fixK,target:cp(V.target),extra:ex,cal:{a:cp(V.cal.a),b:cp(V.cal.b),cm:V.cal.cm},bar:cp(V.bar),man:Object.assign({},V.man),track:V.track,t0:V.t0,t1:V.t1,tIdx:V.tIdx}}
+function remember(label){if(!V.has)return;UH.u.push({s:snapV(),label});if(UH.u.length>60)UH.u.shift();UH.r=[]}
+function resetUndo(){UH.u=[];UH.r=[]}
+function undoV(redo){if(V.busy)return;const A=redo?UH.r:UH.u,B=redo?UH.u:UH.r;if(!A.length)return;stopPlay();const e=A.pop();B.push({s:snapV(),label:e.label});
+  const s=e.s;Object.assign(V,{sport:s.sport,preset:s.preset,rate:s.rate,half:s.half,fixK:s.fixK,target:s.target,extra:s.extra,cal:s.cal,bar:s.bar,man:s.man,track:s.track,t0:s.t0,t1:s.t1,tIdx:s.tIdx,mode:null,res:null,rep:null});
+  if(V.track)reanalyze();render();toast((redo?'다시 실행: ':'되돌림: ')+e.label)}
+const ptName=k=>{const q=ptList().find(p=>p[0]===k);return q?q[1]:'점'};
 let softT;function softUpdate(){clearTimeout(softT);softT=setTimeout(()=>{if(S.view!=='analyze'||V.busy)return;reanalyze();const old=document.getElementById('results'),h=resultsHTML();if(old)old.outerHTML=h;else if(h){const side=document.querySelector('.side');if(side)side.insertAdjacentHTML('beforeend',h)}paint()},300)}
 document.addEventListener('click',async e=>{const t=e.target.closest('button,[data-del]');if(!t)return;
   if(t.id==='playBtn')play();
   else if(t.dataset.nudge){stopPlay();setCur(V.cur+(+t.dataset.nudge)/Math.max(30,V.rate))}
-  else if(t.id==='setT0'){V.t0=Math.min(V.cur,V.t1-.2);if(V.t0<0)V.t0=0;V.target=null;V.extra={};clearTrack();render()}
-  else if(t.id==='setT1'){V.t1=Math.max(V.cur,V.t0+.2);clearTrack();render()}
+  else if(t.id==='setT0'){remember('분석 시작 시점');V.t0=Math.min(V.cur,V.t1-.2);if(V.t0<0)V.t0=0;V.target=null;V.extra={};clearTrack();render()}
+  else if(t.id==='setT1'){remember('분석 끝 시점');V.t1=Math.max(V.cur,V.t0+.2);clearTrack();render()}
   else if(t.id==='barBtn'){stopPlay();V.mode=V.mode==='bar'?null:'bar';render()}
-  else if(t.id==='setTo'||t.id==='setLd'){stopPlay();V.man[t.id==='setTo'?'to':'ld']=V.cur;reanalyze();render()}
-  else if(t.id==='manReset'){V.man={};reanalyze();render()}
+  else if(t.id==='setTo'||t.id==='setLd'){stopPlay();remember(t.id==='setTo'?'이륙 지정':'착지 지정');V.man[t.id==='setTo'?'to':'ld']=V.cur;reanalyze();render()}
+  else if(t.id==='manReset'){remember('이륙·착지 지정 해제');V.man={};reanalyze();render()}
   else if(t.id==='calBtn'){stopPlay();V.mode=V.mode==='calA'||V.mode==='calB'?null:'calA';render()}
   else if(t.id==='tgBtn'){stopPlay();if(V.mode==='target'){V.mode=null;render()}else{const nx=ptList().findIndex(q=>!ptPos(q[0]));V.tIdx=nx<0?0:nx;V.mode='target';await setCur(V.t0);render()}}
   else if(t.dataset.tpt){stopPlay();V.tIdx=+t.dataset.tpt;V.mode='target';await setCur(V.t0);render()}
   else if(t.id==='fixBtn'){stopPlay();V.mode=V.mode==='fix'?null:'fix';render()}
-  else if(t.id==='runBtn'){runTrack(null)}
+  else if(t.id==='runBtn'){if(V.track)remember('다시 분석');runTrack(null)}
+  else if(t.id==='undoBtn'){undoV(false)}
+  else if(t.id==='redoBtn'){undoV(true)}
   else if(t.id==='stopBtn'){V.abort=true}
   else if(t.id==='saveBtn'){const r=V.res;if(!r||!V.has)return;const r3=a=>a.map(v=>Math.round(v*1000)/1000),s=Object.assign({},r.sum);
     const rec={id:'mv_'+Date.now().toString(36),date:today(),name:(V.sport==='free'?(V.name||'이름 없는 동작'):SPORT[V.sport].n).slice(0,30),sport:V.sport,body:parseFloat(V.body)||0,mass:parseFloat(V.mass)||0,fs:r.fs,slow:V.slow,win:V.sport==='cmj'?.03:.06,X:r3(resample(r.t,r.X,Math.min(r.fs,60))),Y:r3(resample(r.t,r.Y,Math.min(r.fs,60))),sum:s,ang:r.angles.map(a=>({n:a.n,min:Math.round(a.min),max:Math.round(a.max)})),created:Date.now(),v:3};rec.fs=Math.min(r.fs,60);
@@ -755,14 +768,14 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
 });
 document.addEventListener('change',async e=>{const t=e.target;
   if(t.id==='file'&&t.files&&t.files[0])await loadFile(t.files[0]);
-  else if(t.id==='fSport'){V.sport=t.value;const sd=SPORT[V.sport];V.preset=sd.presets[0];V.extra={};V.bar=null;V.man={};V.mode=null;V.fixK='main';V.rate=sd.rate;if(V.chart==='ang')V.chart='vy';if(V.has){if(!V.cal.a)V.cal.cm=sd.cm;V.target=null;clearTrack();render()}else{setDemo();render()}}
+  else if(t.id==='fSport'){remember('종목 변경');V.sport=t.value;const sd=SPORT[V.sport];V.preset=sd.presets[0];V.extra={};V.bar=null;V.man={};V.mode=null;V.fixK='main';V.rate=sd.rate;if(V.chart==='ang')V.chart='vy';if(V.has){if(!V.cal.a)V.cal.cm=sd.cm;V.target=null;clearTrack();render()}else{setDemo();render()}}
   else if(t.id==='fBody'){V.body=t.value;softUpdate()}
   else if(t.id==='fRecSport'){S.rsp=t.value;S.sel=null;S.delAsk=null;render()}
   else if(t.id==='fSlow'){V.slow=+t.value;if(V.has){reanalyze();render()}}
-  else if(t.id==='fRate'){V.rate=+t.value;if(V.has){clearTrack();render()}}
-  else if(t.id==='fPreset'){V.preset=t.value;V.extra={};V.mode=null;V.fixK='main';if(V.chart==='ang')V.chart='vy';if(V.has){clearTrack();render()}else render()}
+  else if(t.id==='fRate'){remember('분석 간격 변경');V.rate=+t.value;if(V.has){clearTrack();render()}}
+  else if(t.id==='fPreset'){remember('추적 구성 변경');V.preset=t.value;V.extra={};V.mode=null;V.fixK='main';if(V.chart==='ang')V.chart='vy';if(V.has){clearTrack();render()}else render()}
   else if(t.id==='fixSel'){V.fixK=t.value;uiState()}
-  else if(t.id==='fHalf'){V.half=+t.value;if(V.has){clearTrack();render()}else paint()}
+  else if(t.id==='fHalf'){remember('추적 상자 크기 변경');V.half=+t.value;if(V.has){clearTrack();render()}else paint()}
   else if(t.id==='fCm'){const v=parseFloat(t.value);if(v>0){V.cal.cm=v;if(V.has)softUpdate();else paint()}}
   else if(t.id==='fMass'){V.mass=t.value;softUpdate()}
   else if(t.id==='chartSel'){V.chart=t.value;render()}
@@ -770,6 +783,8 @@ document.addEventListener('change',async e=>{const t=e.target;
 });
 document.addEventListener('input',e=>{const t=e.target;if(t.id==='scrub'){if(V.busy)return;stopPlay();setCur(+t.value)}else if(t.id==='fName')V.name=t.value});
 document.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('label[for="file"]')){e.preventDefault();$('#file').click()}});
+document.addEventListener('keydown',e=>{if(S.view!=='analyze'||!(e.ctrlKey||e.metaKey)||e.altKey||e.target.matches('input[type=text],input[type=number],textarea'))return;const k=e.key.toLowerCase();
+  if(k==='z'&&!e.shiftKey){e.preventDefault();undoV(false)}else if(k==='y'||(k==='z'&&e.shiftKey)){e.preventDefault();undoV(true)}});
 setDemo();route();Store.init();
 </script>
 <script id="sync">
