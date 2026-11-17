@@ -288,6 +288,24 @@ function flightFromDiff(sig,tLow,tAp){const t=sig.t,v=sig.v,n=t.length;if(n<5)re
   let k=-1;for(let i=pk+1;i<n;i++)if(v[i]<L(.3)&&v[i-1]>=L(.3)){k=i;break}if(k<0)return {to,ld:null};
   let k2=k-1;while(k2>pk&&v[k2]<L(.6))k2--;const b1=cr(k,L(.3)),b2=v[k2]>=L(.6)&&k2+1<k?cr(k2+1,L(.6)):b1;let hi=k;while(hi<n-1&&v[hi]>L(.1))hi++;
   return {to,ld:Math.min(t[hi],b1+(b1-b2))}}
+/* 빈 바닥 기준 띠: 최고점(발이 확실히 떠 있는 때)의 띠 화면을 '빈 바닥'으로 삼아, 프레임마다 신발이 띠를 얼마나 덮었는지 봄.
+   선 자세를 기준으로 하면 반동 중 발이 조금 밀리거나 신발이 접힐 때 기준이 틀어지는데, 빈 바닥 기준은 그 영향을 받지 않음.
+   덮인 비율 f인 프레임은 발끝이 띠 높이 dz의 (1-f)만큼 떠 있다고 보고, 이륙 속도로 나눠 0cm 시각을 거꾸로 구함(30fps처럼 전환 프레임이 하나뿐일 때도 씀).
+   전환 프레임이 없으면 '마지막으로 닿은 프레임'과 '띠를 다 벗어난 프레임에서 dz만큼 거슬러 간 시각'의 가운데를 씀 */
+function flightFromBand(t,B,tLow,tAp,dz){const n=t.length;if(n<5||!B||B.length!==n)return null;
+  let a=0;for(let i=0;i<n;i++)if(Math.abs(t[i]-tAp)<Math.abs(t[a]-tAp))a=i;const ref=B[a];if(!ref)return null;const L=ref.length;
+  const v=B.map(b=>{if(!b||b.length!==L)return NaN;let s=0;for(let q=0;q<L;q++)s+=Math.abs(b[q]-ref[q]);return s/L});
+  const F=median(v.filter((x,i)=>Math.abs(t[i]-tAp)<=.05&&isFinite(x))),gb=v.filter((x,i)=>t[i]>=tLow-.1&&t[i]<=tLow+1e-9&&isFinite(x));if(!gb.length)return null;
+  const Gb=median(gb);if(!(Gb-F>4))return null;const Lb=F+.5*(Gb-F);
+  let i=a;while(i>0&&!(v[i]>=Lb))i--;if(!(v[i]>=Lb)||t[i]<tLow-1e-9)return null;
+  let k=a;while(k<n-1&&!(v[k]>=Lb))k++;const hasLd=v[k]>=Lb;
+  const ga=[];if(hasLd)for(let q=k;q<n&&t[q]<=t[k]+.1;q++)if(isFinite(v[q]))ga.push(v[q]);const Ga=ga.length?Math.max(Lb,median(ga)):Gb;
+  const fr=(x,g)=>Math.max(0,Math.min(1,(x-F)/((g-F)||1e-9)));
+  const est=(idx,g,sgn,vz)=>{const e=[];idx.forEach(q=>{if(q<0||q>=n||!isFinite(v[q]))return;const f=fr(v[q],g);if(f>.1&&f<.9)e.push(t[q]+sgn*(1-f)*dz/vz)});return e.length?e.reduce((x,y)=>x+y,0)/e.length:null};
+  let vz=Math.max(.5,G*((hasLd?t[k]:t[a]+(t[a]-t[i]))-t[i])/2),to=null,ld=null;
+  for(let it=0;it<2;it++){const e1=est([i,i+1],Gb,-1,vz);to=e1!=null?e1:(t[i]+Math.max(t[i],t[i+1]-dz/vz))/2;
+    if(hasLd){const e2=est([k-1,k],Ga,1,vz);ld=e2!=null?e2:(Math.min(t[k],t[k-1]+dz/vz)+t[k])/2;vz=Math.max(.5,G*(ld-to)/2)}}
+  return {to,ld,v}}
 /* CMJ: 골반(몸 중심 대용)으로 반동·추진을 나누고, 발끝(또는 직접 지정)으로 체공 시간을 잼. 시간은 분석 시작 = 0 인 실제 초 */
 function cmjReport(r,o){o=o||{};const n=r.t.length,fs=r.fs;if(n<10)return null;
   const i0=Math.min(n-1,Math.round(.25*fs)),base=median(r.Y.slice(0,i0+1)),still=Math.max.apply(null,r.vy.slice(0,i0+1).map(Math.abs))<.15;
@@ -298,7 +316,7 @@ function cmjReport(r,o){o=o||{};const n=r.t.length,fs=r.fs;if(n<10)return null;
   let vu=lo;for(let i=lo;i<=ap;i++)if(r.vy[i]>r.vy[vu])vu=i;
   let to=null,ld=null,src=null;
   if(o.manual&&o.manual.ld>o.manual.to){to=o.manual.to;ld=o.manual.ld;src='manual'}
-  else if(o.foot||o.toe){const f=(o.foot?flightFromDiff(o.foot,r.t[lo],r.t[ap]):null)||(o.toe?flightFromToe(o.toe,r.t[lo],r.t[ap]):null);if(f){to=f.to;ld=f.ld;src='toe'}}
+  else if(o.band||o.foot||o.toe){const f=(o.band?flightFromBand(o.band.t,o.band.B,r.t[lo],r.t[ap],o.band.dz):null)||(o.foot?flightFromDiff(o.foot,r.t[lo],r.t[ap]):null)||(o.toe?flightFromToe(o.toe,r.t[lo],r.t[ap]):null);if(f){to=f.to;ld=f.ld;src='toe'}}
   const at=(a,t)=>{const x=Math.max(0,Math.min(n-1,t*fs)),i=Math.floor(x),f=x-i;return i>=n-1?a[n-1]:a[i]*(1-f)+a[i+1]*f};
   const T=to!=null&&ld!=null?ld-to:null,hFlight=T!=null?G*T*T/8:null,vTo=to!=null?at(r.vy,to):r.vy[vu],hVel=vTo>0?vTo*vTo/(2*G):null;
   const iTo=to!=null?Math.max(lo,Math.min(n-1,Math.round(to*fs))):vu,m=o.mass||0;
@@ -388,7 +406,8 @@ function sportReport(p){const r=V.res,tr=V.track;
   if(V.sport==='pullup')return pullupReport(r,{mass:totalMass(),barY:V.bar?-(V.bar[1]-tr.y[0])/p:null});
   if(V.sport==='cmj'){let toe=null;if(tr.P&&tr.P.toe&&tr.P.toe.y.length===tr.t.length){const T=tr.t.map(v=>(v-tr.t[0])/V.slow),bs=tr.P.toe.y.filter((_,i)=>T[i]<.25),base=median(bs.length?bs:tr.P.toe.y.slice(0,3));toe={t:T,rise:tr.P.toe.y.map(y=>(base-y)/p)}}
     const foot=tr.fd&&tr.fd.length===tr.t.length?{t:tr.t.map(v=>(v-tr.t[0])/V.slow),v:tr.fd}:null;
-    const o={toe,foot,mass:totalMass(),dtFrame:frameDt()};let R=cmjReport(r,o);
+    const band=tr.fbp&&tr.fbp.length===tr.t.length&&tr.fdBox?{t:tr.t.map(v=>(v-tr.t[0])/V.slow),B:tr.fbp,dz:(tr.fdBox.y1-tr.fdBox.y0+1)/p}:null;
+    const o={band,toe,foot,mass:totalMass(),dtFrame:frameDt()};let R=cmjReport(r,o);
     if(R&&(V.man.to!=null||V.man.ld!=null)){const to=V.man.to!=null?(V.man.to-tr.t[0])/V.slow:R.to,ld=V.man.ld!=null?(V.man.ld-tr.t[0])/V.slow:R.ld;if(to!=null&&ld!=null&&ld>to)R=cmjReport(r,Object.assign({},o,{manual:{to,ld}}))}
     return R}
   return null}
@@ -423,12 +442,12 @@ async function runTrack(fix){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.a
   const dt=1/V.rate,half=V.half,w=V.cw,h=V.ch,times=[];for(let t=V.t0;t<=V.t1+1e-6&&times.length<1200;t+=dt)times.push(Math.min(t,V.dur-.002));
   const keys=ptList().map(p=>p[0]),st={},tr={t:[],x:[],y:[],c:[],P:{}};const ppm=pxPerM(),toeP=keys.includes('toe')?(fix&&V.track&&V.track.fdBox?null:ptPos('toe')):null;
   let fb=fix&&V.track&&V.track.fdBox?V.track.fdBox:(toeP&&ppm?{x0:Math.max(0,Math.round(toeP[0]-half)),x1:Math.min(w-1,Math.round(toeP[0]+half)),y0:Math.max(0,Math.round(toeP[1]-.03*ppm)),y1:Math.min(h-1,Math.round(toeP[1]+2))}:null),fref=fix&&V.track&&V.track.fdRef?V.track.fdRef:null;
-  if(fb){tr.fd=[];tr.fdBox=fb}keys.slice(1).forEach(k=>tr.P[k]={x:[],y:[],c:[]});const arr=k=>k==='main'?tr:tr.P[k];let start=0,old=null;
+  if(fb){tr.fd=[];tr.fdBox=fb;tr.fbp=[]}keys.slice(1).forEach(k=>tr.P[k]={x:[],y:[],c:[]});const arr=k=>k==='main'?tr:tr.P[k];let start=0,old=null;
   if(fix&&V.track&&V.track.t.length){/* 지금 화면에 보이는 프레임에서 정확히 다시 시작 */
     start=times.findIndex(t=>t>fix.t+1e-6);if(start<0)start=times.length;times.splice(start,0,fix.t);const o=V.track;old=o;
     /* 고친 점은 새 위치에서, 나머지 점은 그 시점의 기존 위치에서 다시 시작 */
     keys.forEach(k=>{const q=k===fix.k?fix:trackAt(fix.t,k);st[k]={pos:{x:q.x,y:q.y},vel:{x:0,y:0}}});
-    for(let i=0;i<o.t.length;i++)if(o.t[i]<times[start]-1e-6){tr.t.push(o.t[i]);if(fb&&o.fd)tr.fd.push(o.fd[i]);keys.forEach(k=>{const sr=k==='main'?o:o.P[k],d=arr(k);d.x.push(sr.x[i]);d.y.push(sr.y[i]);d.c.push(sr.c[i])})}}
+    for(let i=0;i<o.t.length;i++)if(o.t[i]<times[start]-1e-6){tr.t.push(o.t[i]);if(fb&&o.fd)tr.fd.push(o.fd[i]);if(fb&&o.fbp)tr.fbp.push(o.fbp[i]);keys.forEach(k=>{const sr=k==='main'?o:o.P[k],d=arr(k);d.x.push(sr.x[i]);d.y.push(sr.y[i]);d.c.push(sr.c[i])})}}
   else keys.forEach(k=>{const p=ptPos(k);st[k]={pos:{x:p[0],y:p[1]},vel:{x:0,y:0}}});
   let init=false,last=null;const R=Math.max(14,Math.round(half*1.6));V.track=tr;
   for(let i=start;i<times.length;i++){if(V.abort)break;const mt=await seekTo(times[i]);
@@ -438,9 +457,9 @@ async function runTrack(fix){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.a
     if(mt==null&&init&&sum===last)continue; /* 프레임 시각을 모를 때: 앞과 완전히 같은 그림은 중복으로 보고 건너뜀 */
     last=sum;const ts=mt!=null?mt:times[i];
     if(!init&&old)keys.forEach(k=>{if(k!==fix.k){const q=trackAt(ts,k,old);if(q)st[k].pos={x:q.x,y:q.y}}});
-    if(!init)while(tr.t.length&&tr.t[tr.t.length-1]>=ts-1e-5){tr.t.pop();if(tr.fd)tr.fd.pop();keys.forEach(k=>{const d=arr(k);d.x.pop();d.y.pop();d.c.pop()})}
+    if(!init)while(tr.t.length&&tr.t[tr.t.length-1]>=ts-1e-5){tr.t.pop();if(tr.fd)tr.fd.pop();if(tr.fbp)tr.fbp.pop();keys.forEach(k=>{const d=arr(k);d.x.pop();d.y.pop();d.c.pop()})}
     if(fb){const bw=fb.x1-fb.x0+1;if(!fref){fref=new Float32Array(bw*(fb.y1-fb.y0+1));for(let y=fb.y0,q=0;y<=fb.y1;y++)for(let x=fb.x0;x<=fb.x1;x++,q++)fref[q]=g[y*w+x];tr.fdRef=fref}
-      let sd=0,q=0;for(let y=fb.y0;y<=fb.y1;y++)for(let x=fb.x0;x<=fb.x1;x++,q++)sd+=Math.abs(g[y*w+x]-fref[q]);tr.fd.push(sd/q)}
+      let sd=0,q=0;const bp=new Uint8Array(fref.length);for(let y=fb.y0;y<=fb.y1;y++)for(let x=fb.x0;x<=fb.x1;x++,q++){sd+=Math.abs(g[y*w+x]-fref[q]);bp[q]=g[y*w+x]}tr.fd.push(sd/q);tr.fbp.push(bp)}
     keys.forEach(k=>{const s=st[k];let c=1;
       if(!init){s.tm=cutPatch(g,w,h,s.pos.x,s.pos.y,half);s.tm0=s.tm.slice()}
       else{const px=Math.max(half,Math.min(w-half-1,s.pos.x+s.vel.x)),py=Math.max(half,Math.min(h-half-1,s.pos.y+s.vel.y));let r=matchAround(g,w,h,s.tm,half,px,py,R);

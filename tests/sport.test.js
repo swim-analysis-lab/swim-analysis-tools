@@ -1,6 +1,6 @@
 const fs=require('fs'),path=require('path');const html=fs.readFileSync(path.join(__dirname,'../motion/index.html'),'utf8');
 const core=html.match(/<script id="core">([\s\S]*?)<\/script>/)[1];const c={};
-new Function('c',core+';Object.assign(c,{analyze,pullupReport,cmjReport,flightFromToe,flightFromDiff,median,G})')(c);
+new Function('c',core+';Object.assign(c,{analyze,pullupReport,cmjReport,flightFromToe,flightFromDiff,flightFromBand,median,G})')(c);
 let fail=0;const near=(n,a,b,tol)=>{const ok=a!=null&&Math.abs(a-b)<=tol;if(!ok)fail++;console.log((ok?'ok  ':'FAIL')+' '+n+': '+(a==null?a:+a.toFixed(4))+' vs '+(+b.toFixed(4))+' (±'+tol+')')};
 const sm=u=>u<=0?0:u>=1?1:u*u*u*(u*(6*u-15)+10);
 // ---- 풀업: 3회, 이동 0.55/0.53/0.50m, 올림 0.75/0.85/1.0초, 바 0.52m
@@ -27,4 +27,13 @@ for(const fsv of [60,120,240]){const {tr,px,T,tTo,tLd}=cmjTrack(fsv,2.6);const r
 for(const fsv of [60,120,240]){const {tr,px,T,tTo,tLd}=cmjTrack(fsv,2.6);const r=c.analyze(tr,{pxPerM:px,slow:1,mass:75,rate:fsv,win:.03});
   const v=tr.P.toe.y.map(y=>{const rise=(655-y)/px;return 2+40*Math.min(1,rise/.03)});const R=c.cmjReport(r,{foot:{t:tr.t,v},mass:75});
   near(' diff takeoff fs'+fsv,R.to,tTo,1/fsv);near(' diff landing fs'+fsv,R.ld,tLd,1/fsv);near(' diff h fs'+fsv,R.hFlight,9.81*T*T/8,.012)}
+// 빈 바닥 기준 띠: 반동 중 발이 4px 밀리고(선 자세 기준이 틀어지는 경우), 노출 시간 동안 흐려지는 실제 영상에 가깝게 만든 띠 화면
+{const H=10,W=33,ppm=250,dz=H/ppm,g=9.81;let seed=11;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647};
+  const floor=[],shoe=[];for(let q=0;q<H*W;q++)floor.push(80+60*rnd());for(let q=0;q<H*(W+12);q++)shoe.push(20+40*rnd());
+  const pix=(z,xs,r,cc)=>{const hr=(H-1-r+.5)/ppm;return hr>=z&&cc>=xs?shoe[r*(W+12)+(cc-xs+6)]:floor[r*W+cc]};
+  for(const [fsv,vto,ph,tol] of [[30,2.6,0,.015],[30,2.6,.4,.015],[30,3.1,.7,.015],[60,2.6,.3,.01],[120,2.6,.5,.006],[240,2.6,.2,.004]]){
+    const to=1.0+ph/fsv,T=2*vto/g,tLow=to-.25,tAp=to+T/2,z=t=>t<=to||t>=to+T?0:vto*(t-to)-g/2*(t-to)**2,xs=t=>t<tLow-.3?8:t<tLow?8-4*(t-tLow+.3)/.3:4;
+    const ts=[],B=[];for(let i=0;i<=2.2*fsv;i++){const t=i/fsv,b=new Uint8Array(H*W);for(let r=0;r<H;r++)for(let cc=0;cc<W;cc++){let s=0;for(let k=0;k<4;k++){const tt=t+(k/4-.25)/fsv/2;s+=pix(z(tt),Math.round(xs(tt)),r,cc)}b[r*W+cc]=Math.round(s/4)}ts.push(t);B.push(b)}
+    const f=c.flightFromBand(ts,B,tLow,tAp,dz),h=f?g*(f.ld-f.to)**2/8:null;near('band h fs'+fsv+' v'+vto+' ph'+ph,h,vto*vto/(2*g),tol);
+    if(fsv===30&&ph===0){const ref=B[0],v=B.map(b=>{let s=0;for(let q=0;q<b.length;q++)s+=Math.abs(b[q]-ref[q]);return s/b.length});const o=c.flightFromDiff({t:ts,v},tLow,tAp);console.log('     (선 자세 기준 방식:',o?'h '+(g*(o.ld-o.to)**2/8*100).toFixed(1)+'cm':'검출 실패',')')}}}
 console.log(fail?fail+' FAILED':'ALL PASS');process.exit(fail?1:0)
