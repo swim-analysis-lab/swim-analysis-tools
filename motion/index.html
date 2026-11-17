@@ -161,6 +161,13 @@ h3{font-size:13px;margin-top:10px}
 label.pick{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center}
 label.pick input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:200px;z-index:1}
 label.pick:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+
+/* 기기 연결 시트 */
+#syncSheet{position:fixed;inset:0;z-index:40;background:rgba(8,10,12,.45);display:flex;align-items:flex-end;justify-content:center}
+#syncSheet[hidden]{display:none}
+#syncSheet .sheet{background:var(--surface);color:var(--ink);width:100%;max-width:480px;border-radius:20px 20px 0 0;padding:22px 20px calc(24px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:14px;max-height:88vh;overflow:auto}
+@media (min-width:721px){#syncSheet{align-items:center}#syncSheet .sheet{border-radius:18px}}
+header.top .where .btn{margin-left:6px;min-height:28px;padding:3px 10px;font-size:12px}
 </style>
 </head>
 <body>
@@ -177,6 +184,7 @@ label.pick:focus-within{outline:2px solid var(--accent);outline-offset:2px}
   </nav>
   <main id="main"></main>
 </div>
+<div id="syncSheet" hidden></div>
 <div id="toast" class="toast" style="display:none" role="status"></div>
 
 <script id="core">
@@ -716,5 +724,91 @@ document.addEventListener('input',e=>{const t=e.target;if(t.id==='scrub'){if(V.b
 document.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('label[for="file"]')){e.preventDefault();$('#file').click()}});
 setDemo();route();Store.init();
 </script>
+<script id="sync">
+/* ===== 기기 연결 코드: 로그인 없이 코드로 폰·노트북 기록 맞추기 =====
+   서버에는 코드를 변환한 값(SHA-256)과, 코드로 만든 열쇠로 암호화한 기록만 올라감 */
+const SYNC={url:'https://ucmuujosttmpbnneylke.supabase.co',key:'sb_publishable_l9XGTCrphpj4EIZwH6fh4g_0dEsiDau',app:'motion'};
+const SyncCore={ALPH:'ABCDEFGHJKMNPQRSTUVWXYZ23456789',
+  gen(){const a=new Uint32Array(16);crypto.getRandomValues(a);let s='';for(let i=0;i<16;i++){s+=this.ALPH[a[i]%31];if(i%4===3&&i<15)s+='-'}return s},
+  norm(x){const t=String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(t.length!==16)return null;for(const ch of t)if(this.ALPH.indexOf(ch)<0)return null;return t.match(/.{4}/g).join('-')},
+  async hex(s){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return Array.from(new Uint8Array(b)).map(v=>v.toString(16).padStart(2,'0')).join('')},
+  async deriveKey(code){const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(code),'PBKDF2',false,['deriveKey']);
+    return crypto.subtle.deriveKey({name:'PBKDF2',salt:new TextEncoder().encode('swim-analysis-lab/v1'),iterations:150000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])},
+  b64(u){let s='';for(let i=0;i<u.length;i+=32768)s+=String.fromCharCode.apply(null,u.subarray(i,i+32768));return btoa(s)},
+  unb64(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u},
+  async enc(key,text){const iv=crypto.getRandomValues(new Uint8Array(12)),ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode(text))),o=new Uint8Array(12+ct.length);o.set(iv);o.set(ct,12);return 'v1:'+this.b64(o)},
+  async dec(key,s){const u=this.unb64(String(s).replace(/^v1:/,''));return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:u.subarray(0,12)},key,u.subarray(12)))},
+  /* 두 기기 기록 합치기: 같은 기록은 나중에 고친 쪽, 지운 기록은 지운 시각이 더 늦으면 빠짐 */
+  merge(A,B){const del=Object.assign({},A.del||{});for(const k in (B.del||{}))del[k]=Math.max(del[k]||0,B.del[k]);
+    const u=r=>r.u||r.created||0,m={};[].concat(A.recs||[],B.recs||[]).forEach(r=>{if(!r||!r.id)return;const o=m[r.id];if(!o||u(r)>u(o))m[r.id]=r});
+    const recs=Object.keys(m).sort().map(k=>m[k]).filter(r=>!(del[r.id]&&del[r.id]>=u(r)));
+    let ext=A.ext||null;if(B.ext&&(!ext||(B.ext.u||0)>(ext.u||0)))ext=B.ext;
+    const out={v:1,recs,del:{}};Object.keys(del).sort().forEach(k=>out.del[k]=del[k]);if(ext)out.ext=ext;return out}};
+const SyncLocal={rk:SYNC.app==='streamline'?'sl_recs':'mv_recs',dk:SYNC.app==='streamline'?'sl_del':'mv_del',
+  get(){const o={recs:LS.get(this.rk,[]),del:LS.get(this.dk,{})};if(SYNC.app==='streamline')o.ext={v:LS.get('sl_tests',{}),u:LS.get('sl_testsU',0)};return o},
+  set(M){LS.set(this.rk,M.recs);LS.set(this.dk,M.del);if(SYNC.app==='streamline'&&M.ext){LS.set('sl_tests',M.ext.v||{});LS.set('sl_testsU',M.ext.u||0);if(Store.mode!=='cloud')S.tests=M.ext.v||{}}
+    if(Store.mode!=='cloud')S.recs=M.recs.slice()}};
+const Sync={code:null,id:null,key:null,busy:false,again:false,last:null,err:null,timer:null,open:false,msg:'',
+  ready(){return !!SYNC.key&&SYNC.key.indexOf('__')<0},
+  on(){return Store.mode!=='cloud'},
+  async rpc(fn,body){const h={'Content-Type':'application/json',apikey:SYNC.key};if(SYNC.key.indexOf('sb_')!==0)h.Authorization='Bearer '+SYNC.key;let r;
+    try{r=await fetch(SYNC.url+'/rest/v1/rpc/'+fn,{method:'POST',headers:h,body:JSON.stringify(body)})}catch(e){throw new Error('net')}
+    if(!r.ok)throw new Error('http'+r.status);const t=await r.text();return t?JSON.parse(t):null},
+  async use(code){this.code=code;this.id=await SyncCore.hex('swim-analysis-lab/id/'+code);this.key=await SyncCore.deriveKey(code)},
+  async boot(){for(let i=0;i<70&&Store.mode==='checking';i++)await new Promise(r=>setTimeout(r,200));
+    const c=LS.get('sal_code',null);if(c&&this.on()&&this.ready()){await this.use(c);await this.run()}else whereUI()},
+  soon(){if(!this.code||!this.on())return;clearTimeout(this.timer);this.timer=setTimeout(()=>this.run(),1200)},
+  async run(){if(!this.code)return;if(this.busy){this.again=true;return}this.busy=true;this.err=null;syncUI();
+    try{const rows=await this.rpc('sync_get',{p_id:this.id,p_app:SYNC.app});let remote=null;
+      if(rows&&rows.length&&rows[0].data){try{remote=JSON.parse(await SyncCore.dec(this.key,rows[0].data))}catch(e){throw new Error('dec')}}
+      const L=SyncLocal.get(),M=remote?SyncCore.merge(L,remote):SyncCore.merge(L,{});SyncLocal.set(M);
+      if(!remote||JSON.stringify(SyncCore.merge(remote,{}))!==JSON.stringify(M))await this.rpc('sync_put',{p_id:this.id,p_app:SYNC.app,p_data:await SyncCore.enc(this.key,JSON.stringify(M))});
+      this.last=Date.now();refresh()}
+    catch(e){this.err=e.message}
+    this.busy=false;syncUI();if(this.again){this.again=false;this.run()}},
+  async create(){if(!this.ready())throw new Error('setup');for(let k=0;k<5;k++){const c=SyncCore.gen(),id=await SyncCore.hex('swim-analysis-lab/id/'+c);
+      if(await this.rpc('sync_claim',{p_id:id})===true){await this.use(c);LS.set('sal_code',c);await this.run();return c}}throw new Error('claim')},
+  async join(x){const c=SyncCore.norm(x);if(!c)return 'bad';const id=await SyncCore.hex('swim-analysis-lab/id/'+c);
+    if(await this.rpc('sync_exists',{p_id:id})!==true)return 'none';await this.use(c);LS.set('sal_code',c);await this.run();return 'ok'},
+  leave(){LS.del('sal_code');this.code=this.id=this.key=null;this.last=this.err=null;syncUI()}};
+/* 저장·삭제할 때 고친 시각과 지운 기록을 남기고 곧바로 맞춤 */
+(function(){const sv=Store.save.bind(Store),rm=Store.remove.bind(Store);
+  Store.save=async function(rec,...a){rec.u=Date.now();const r=await sv(rec,...a);Sync.soon();return r};
+  Store.remove=async function(id){const d=LS.get(SyncLocal.dk,{});d[id]=Date.now();LS.set(SyncLocal.dk,d);const r=await rm(id);Sync.soon();return r};
+  if(Store.saveTests){const st=Store.saveTests.bind(Store);Store.saveTests=async function(t){LS.set('sl_testsU',Date.now());const r=await st(t);Sync.soon();return r}}})();
+const syncErr=e=>e==='net'||/^http5/.test(e||'')?'서버에 연결하지 못했습니다. 인터넷을 확인해 주세요. 서버가 7일 동안 쓰이지 않아 잠시 멈춘 것일 수도 있습니다. 이 기기의 기록은 그대로 있습니다.':e==='dec'?'서버 기록을 풀지 못했습니다. 코드를 다시 확인해 주세요.':e==='setup'?'아직 서버 설정이 끝나지 않았습니다.':'동기화하지 못했습니다 ('+e+'). 잠시 뒤 다시 시도해 주세요.';
+const hm=t=>{const d=new Date(t);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')};
+const _where0=whereUI;
+whereUI=function(){_where0();const w=document.getElementById('where');if(!w)return;
+  if(Sync.code&&Sync.on()){w.innerHTML='<span class="dot '+(Sync.err?'local':'cloud')+'"></span><span>'+(Sync.busy?'맞추는 중':Sync.err?'동기화 안 됨':'코드 연결'+(Sync.last?' · '+hm(Sync.last):''))+'</span>'}
+  if(Sync.on()){const b=document.createElement('button');b.type='button';b.className='btn sm';b.id='syncOpen';b.textContent=Sync.code?'코드':'기기 연결';w.appendChild(b)}};
+function syncUI(){whereUI();const el=document.getElementById('syncSheet');if(!el)return;if(!Sync.open){el.hidden=true;return}el.hidden=false;
+  const photoNote=SYNC.app==='streamline'?'<li>측면 사진은 올라가지 않고 이 기기에만 남습니다. 다른 기기에서는 수치·관절선·그래프만 보입니다.</li>':'';
+  let h='<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="syncTitle"><div class="row"><h2 id="syncTitle">기기 연결 코드</h2><button class="btn sm" type="button" id="syncClose" style="margin-left:auto">닫기</button></div>';
+  if(!Sync.ready())h+='<p class="muted">서버 설정이 아직 끝나지 않았습니다.</p>';
+  else if(!Sync.code){h+='<p class="small muted">로그인 없이 코드 하나로 폰과 노트북의 기록을 맞춥니다. 이 기기에서 처음이면 새 코드를 만들고, 다른 기기에서 만든 코드가 있으면 입력하세요.</p>'+
+    '<div class="row"><button class="btn primary" type="button" id="syncNew">새 코드 만들기</button></div>'+
+    '<div class="field"><label for="syncIn">다른 기기에서 만든 코드</label><div class="row" style="flex-wrap:nowrap"><input id="syncIn" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" class="num" style="letter-spacing:.06em"><button class="btn" type="button" id="syncJoin">연결</button></div></div>'}
+  else{h+='<div><div class="small muted">이 기기의 코드</div><div class="num" id="syncCode" style="font-size:clamp(20px,6.4vw,28px);font-weight:600;letter-spacing:.03em;white-space:nowrap;user-select:all;-webkit-user-select:all">'+esc(Sync.code)+'</div></div>'+
+    '<div class="row"><button class="btn primary" type="button" id="syncCopy">코드 복사</button><button class="btn" type="button" id="syncNow"'+(Sync.busy?' disabled':'')+'>지금 맞추기</button></div>'+
+    '<p class="small '+(Sync.err?'':'muted')+'">'+(Sync.busy?'맞추는 중입니다.':Sync.err?syncErr(Sync.err):Sync.last?'마지막으로 맞춘 시각 '+hm(Sync.last):'')+'</p>'+
+    '<div class="row"><button class="btn sm danger" type="button" id="syncLeave">이 기기에서 연결 끊기</button></div>'}
+  if(Sync.msg)h+='<p class="small" role="status">'+esc(Sync.msg)+'</p>';
+  h+='<ul class="small muted" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px"><li>코드를 잃어버리면 서버의 기록을 되살릴 수 없습니다. 메모장에 저장해 두세요.</li><li>코드를 아는 사람은 기록을 볼 수 있습니다. 다른 사람에게 알려주지 마세요.</li>'+photoNote+'<li>연결을 끊어도 이 기기의 기록은 지워지지 않습니다.</li></ul></div>';
+  el.innerHTML=h}
+document.addEventListener('click',async e=>{const t=e.target.closest('#syncOpen,#syncClose,#syncNew,#syncJoin,#syncCopy,#syncNow,#syncLeave,#syncSheet');if(!t)return;
+  if(t.id==='syncSheet'){if(e.target===t){Sync.open=false;syncUI()}return}
+  if(t.id==='syncOpen'){Sync.open=true;Sync.msg='';syncUI();return}
+  if(t.id==='syncClose'){Sync.open=false;syncUI();return}
+  Sync.msg='';
+  if(t.id==='syncNew'){t.disabled=true;try{await Sync.create();Sync.msg='새 코드를 만들었습니다. 다른 기기에서 이 코드를 입력하세요.'}catch(x){Sync.msg=syncErr(x.message)}syncUI()}
+  else if(t.id==='syncJoin'){const v=document.getElementById('syncIn').value;t.disabled=true;try{const r=await Sync.join(v);Sync.msg=r==='bad'?'코드 형식이 맞지 않습니다. 영문·숫자 16자리입니다.':r==='none'?'없는 코드입니다. 다시 확인해 주세요.':'연결했습니다. 두 기기의 기록을 합쳤습니다.'}catch(x){Sync.msg=syncErr(x.message)}syncUI()}
+  else if(t.id==='syncCopy'){try{await navigator.clipboard.writeText(Sync.code);Sync.msg='복사했습니다.'}catch(x){Sync.msg='복사가 막혀 있습니다. 코드를 길게 눌러 복사해 주세요.'}syncUI()}
+  else if(t.id==='syncNow'){await Sync.run()}
+  else if(t.id==='syncLeave'){Sync.leave();Sync.msg='이 기기에서 연결을 끊었습니다.';syncUI()}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&Sync.open){Sync.open=false;syncUI()}});
+Sync.boot();
+</script>
+
 </body>
 </html>
