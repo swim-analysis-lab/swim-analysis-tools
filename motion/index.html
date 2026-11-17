@@ -319,23 +319,24 @@ const f2=v=>v==null?'–':v.toFixed(2),f1=v=>v==null?'–':v.toFixed(1),f0=v=>v=
 const vid=document.getElementById('vid'),wk=document.createElement('canvas');let wctx=null;
 const V={has:false,dur:0,cw:405,ch:720,cur:0,t0:0,t1:0,slow:1,rate:60,name:'',mass:'',cal:{a:null,b:null,cm:45},target:null,half:16,track:null,res:null,mode:null,busy:false,abort:false,playing:false,chart:'vy',tmp:null,prog:'',preset:'pu1',extra:{},tIdx:0,fixK:'main',sport:'pullup',body:'',bar:null,man:{},rep:null};
 /* 추적 구성: 주 추적점 하나는 항상 있고, 각도용 점을 더할 수 있음 */
-const SPORT={pullup:{n:'중량 풀업',main:'턱',presets:['pu1','pu2'],cm:45,rate:60,massL:'추가 중량(kg)',
-   cal:'벨트에 단 원판의 지름을 찍습니다(범퍼·20kg 원판은 보통 45cm). 원판이 없으면 몸과 같은 거리에 세운, 길이를 아는 막대를 찍으세요.',
-   tgt:'턱 끝을 찍습니다. 손이나 바에 가려지지 않는 각도로 찍은 영상이 좋고, 턱 끝에 작은 스티커를 붙이면 훨씬 안정적으로 따라갑니다.'},
+const SPORT={pullup:{n:'중량 풀업',main:'머리 추적점',presets:['pu1','pu2'],cm:45,rate:60,massL:'추가 중량(kg)',
+   cal:'벨트에 단 원판의 <b>세로 지름</b>(위 끝–아래 끝)을 찍습니다. 범퍼·20kg 원판은 보통 45cm입니다. 사선에서 찍어도 세로 지름은 거의 그대로입니다.',
+   tgt:'옆에서 찍었으면 <b>턱 끝</b>, 뒤나 사선 뒤에서 찍었으면 <b>뒤통수 가운데</b>(머리카락 무늬가 잘 따라갑니다)를 찍습니다.'},
  cmj:{n:'CMJ (반동 점프)',main:'골반',presets:['cm1','cm2','cm0'],cm:100,rate:120,massL:'추가 중량(kg, 조끼 등)',
    cal:'몸과 같은 거리에 있는, 길이를 아는 두 점을 찍습니다. 몸 옆 벽이나 기둥에 100cm 간격으로 테이프를 붙여 두면 편합니다.',
-   tgt:'골반 옆(허리 벨트나 붙인 테이프)을 찍습니다. 몸 중심 대신 쓰는 점입니다.'},
+   tgt:'<b>골반</b>: 허벅지 맨 위 바깥쪽 뼈(대전자) 위치를 찍습니다. 바지 로고·솔기처럼 무늬가 있는 곳이면 더 잘 따라갑니다.'},
  free:{n:'기타 (바벨 등)',main:'주 추적점',presets:['one','hipknee','angle3'],cm:45,rate:60,massL:'무게(kg, 선택)',
    cal:'길이를 아는 두 점을 찍습니다. 표준 원판 지름은 45cm입니다. 추적할 물체와 카메라에서 같은 거리에 있는 것이어야 합니다.',
    tgt:'속도를 잴 물체에서 무늬나 경계가 뚜렷한 곳(바벨 끝, 원판 중심 등)을 찍습니다.'}};
-const PRESET={pu1:{n:'턱만 (속도·이동 거리·턱 넘김)',pts:[],ang:[],bones:[]},
- pu2:{n:'턱 + 팔꿈치 각도 (끝까지 내려왔는지)',pts:[['shoulder','어깨'],['elbow','팔꿈치'],['wrist','손목']],ang:[{n:'팔꿈치',pts:['shoulder','elbow','wrist']}],bones:[['shoulder','elbow'],['elbow','wrist']]},
+const PRESET={pu1:{n:'머리 추적점만 (속도·이동 거리)',pts:[],ang:[],bones:[]},
+ pu2:{n:'머리 추적점 + 팔꿈치 각도 (끝까지 내려왔는지)',pts:[['shoulder','어깨'],['elbow','팔꿈치'],['wrist','손목']],ang:[{n:'팔꿈치',pts:['shoulder','elbow','wrist']}],bones:[['shoulder','elbow'],['elbow','wrist']]},
  cm1:{n:'골반 + 발끝 (점프 높이)',pts:[['toe','발끝']],ang:[],bones:[]},
  cm2:{n:'골반 + 무릎·발목·발끝 (높이 + 무릎 각도)',pts:[['knee','무릎'],['ankle','발목'],['toe','발끝']],ang:[{n:'무릎',pts:['main','knee','ankle']}],bones:[['main','knee'],['knee','ankle'],['ankle','toe']]},
  cm0:{n:'골반만 (높이는 참고값)',pts:[],ang:[],bones:[]},
  one:{n:'한 점 (궤적·속도)',pts:[],ang:[],bones:[]},
  hipknee:{n:'한 점 + 힙·무릎 각도',pts:[['shoulder','어깨'],['hip','골반'],['knee','무릎'],['ankle','발목']],ang:[{n:'힙',pts:['shoulder','hip','knee']},{n:'무릎',pts:['hip','knee','ankle']}],bones:[['shoulder','hip'],['hip','knee'],['knee','ankle']]},
  angle3:{n:'한 점 + 각도 1개 (세 점 직접 지정)',pts:[['a1','각도 점 1'],['a2','꼭짓점'],['a3','각도 점 3']],ang:[{n:'각도',pts:['a1','a2','a3']}],bones:[['a1','a2'],['a2','a3']]}};
+const PHINT={shoulder:'<b>어깨</b>: 어깨 끝 뼈 바로 아래, 위팔이 시작되는 둥근 부분의 가운데.',elbow:'<b>팔꿈치</b>: 팔꿈치 바깥쪽 뼈의 가운데.',wrist:'<b>손목</b>: 손목 바깥쪽(새끼손가락 쪽) 튀어나온 뼈.',knee:'<b>무릎</b>: 무릎 바깥쪽 측면의 가운데. 앞쪽 슬개골이 아닙니다. 다리 윤곽이 상자에 들어오게 추적 상자를 크게 두세요.',ankle:'<b>발목</b>: 바깥 복사뼈의 가운데.',toe:'<b>발끝</b>: 신발 앞코 끝, 바닥에 닿는 점. 이륙·착지를 이 점으로 잽니다.',a1:'각도를 이루는 첫 번째 점.',a2:'각도를 잴 꼭짓점(관절).',a3:'각도를 이루는 세 번째 점.'};
 const ptList=()=>[['main',SPORT[V.sport].main]].concat(PRESET[V.preset].pts),ptPos=k=>k==='main'?V.target:(V.extra[k]||null),allSet=()=>ptList().every(p=>ptPos(p[0]));
 const S={recs:[],view:'analyze',sel:null,delAsk:null,rsp:null};
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}}};
@@ -584,7 +585,7 @@ function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has,R
   if(!demo)h+='<div class="row">'+(ptList().length>1?'<div class="field" style="max-width:150px"><label for="fixSel">고칠 점</label><select id="fixSel">'+ptList().map(p=>'<option value="'+p[0]+'"'+(V.fixK===p[0]?' selected':'')+'>'+p[1]+'</option>').join('')+'</select></div>':'')+'<button class="btn'+(V.mode==='fix'?' on':'')+'" type="button" id="fixBtn">현재 시점부터 위치 고치기</button><button class="btn primary" type="button" id="saveBtn">기록 저장</button></div>';
   return h+'</div>'}
 function guideText(){if(V.busy)return '추적 중입니다 '+V.prog;if(!V.has)return '예시 궤적입니다. 재생하거나 막대를 움직여 보세요. 내 영상을 선택하면 바뀝니다.';
-  return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(ptList()[V.tIdx][0]==='toe'?'신발 앞코 끝을 찍습니다. 이륙과 착지를 이 점으로 잽니다.':'관절 중심에서 주변과 구분되는 곳을 고르세요.')),fix:'이 시점의 <b>'+((ptList().find(q=>q[0]===V.fixK)||['','점'])[1])+'</b> 올바른 위치를 누르세요. 여기서부터 끝까지 다시 추적합니다.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
+  return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(PHINT[ptList()[V.tIdx][0]]||'관절 중심을 찍습니다.'))+' 누른 채 움직이면 확대경이 나옵니다.',fix:'이 시점의 <b>'+((ptList().find(q=>q[0]===V.fixK)||['','점'])[1])+'</b> 올바른 위치를 누르세요. 여기서부터 끝까지 다시 추적합니다.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
 function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disabled';
   return '<div class="cols"><div class="card editor">'+
    '<div class="row"><label class="btn primary pick">'+(V.has?'다른 영상 선택':'영상 선택')+'<input id="file" type="file" accept="video/*" aria-label="'+(V.has?'다른 영상 선택':'영상 선택')+'"></label><span class="small muted">카메라를 고정하고 옆에서 찍은 영상. <a href="#guide">촬영 조건 보기</a></span></div>'+
@@ -644,17 +645,45 @@ function viewRecords(){const all=S.recs.slice().sort((a,b)=>a.created<b.created?
   return h+(sp==='pullup'?pullRecHTML(list):sp==='cmj'?cmjRecHTML(list):freeRecHTML(list))+'</div>'}
 
 /* ===== 방법 화면 ===== */
-function viewGuide(){return '<div class="card"><h2>중량 풀업 촬영·측정</h2><div class="prose"><ul>'+
- '<li><b>카메라</b> 몸 옆에서 바와 몸 전체가 들어오게 고정합니다. 높이는 가슴~바 사이가 좋습니다.</li>'+
- '<li><b>기준 길이</b> 벨트에 단 원판의 지름(범퍼·20kg 원판은 보통 45cm)이 몸과 같은 거리에 있어 가장 좋습니다.</li>'+
- '<li><b>추적점</b> 턱 끝. 작은 스티커를 붙이면 안정적입니다. 바 높이를 찍으면 반복마다 턱이 바를 넘었는지 판정합니다. 팔꿈치 각도를 고르면 매 반복 끝까지 내려왔는지도 봅니다.</li>'+
- '<li><b>보는 지표</b> 반복별 평균 속도(올린 거리 ÷ 시간)와 속도 저하. 같은 추가 중량에서 평균 속도가 오르면 힘이 늘었다는 신호입니다. 기록 화면에서 무게별 최고 평균 속도를 모아 봅니다.</li></ul></div></div>'+
- '<div class="card"><h2>CMJ 촬영·측정</h2><div class="prose"><ul>'+
- '<li><b>카메라</b> 몸 옆, 무릎~허리 높이에 고정합니다. 발끝이 바닥에 닿아 있는 모습이 잘 보여야 이륙·착지를 잡을 수 있습니다.</li>'+
- '<li><b>프레임</b> 120~240fps 슬로모션을 권합니다. 30fps는 1프레임이 33ms라 높이 오차가 4~5cm까지 커집니다. 슬로모션 파일이면 1번의 영상 속도를 맞춰 주세요.</li>'+
- '<li><b>자세</b> 손은 허리에 고정하고 매번 같은 방식으로 뜁니다. 시작 전 0.5초 이상 가만히 서 있고, 분석 구간 시작을 그 시점에 둡니다. 착지할 때 무릎을 편 채 발끝부터 닿아야 체공 시간 높이가 맞습니다.</li>'+
- '<li><b>추적점</b> 골반 옆(허리 벨트나 테이프)과 신발 앞코. 무릎·발목까지 찍으면 반동 때 무릎 각도도 나옵니다.</li>'+
- '<li><b>보는 지표</b> 점프 높이(체공 시간), 반동 깊이, 이륙까지 시간, RSImod(높이 ÷ 이륙까지 시간). RSImod는 같은 높이를 더 짧은 시간에 만들수록 커집니다.</li></ul></div></div>'+
+function viewGuide(){return '<div class="card"><h2>먼저 알아둘 것</h2><div class="prose"><ul>'+
+ '<li>관절 자동 인식은 아직 없습니다. <b>점은 처음 한 번만 직접 찍고</b>, 그다음부터는 앱이 영상 끝까지 따라갑니다.</li>'+
+ '<li>점은 항상 <b>분석 구간의 첫 프레임</b>에서 찍습니다. "추적할 점 찍기"를 누르면 앱이 그 프레임으로 자동 이동합니다. 그래서 분석 구간 시작을 어디에 두느냐가 곧 마킹 자세입니다.</li>'+
+ '<li>마커 스티커는 없어도 됩니다. 대신 매번 <b>같은 옷, 같은 자리, 같은 카메라 위치</b>로 찍어야 회차끼리 비교됩니다.</li>'+
+ '<li>점을 누른 채 손가락을 움직이면 확대경이 나옵니다. 손을 떼는 위치에 점이 찍힙니다.</li></ul></div></div>'+
+ '<div class="card"><h2>중량 풀업 따라 하기</h2><div class="prose">'+
+ '<p><b>찍기 전</b></p><ol>'+
+ '<li>카메라를 <b>수평으로</b> 고정합니다. 위로 올려 찍지 않습니다. 옆이 가장 좋고, 안 되면 사선 뒤에서 가슴~바 사이 높이로 둡니다.</li>'+
+ '<li>바, 머리, 벨트 원판이 처음부터 끝까지 화면에 들어오게 합니다.</li>'+
+ '<li>매달린 뒤 <b>팔을 다 편 상태로 1초 멈췄다가</b> 시작하고, 마지막 반복 뒤에도 1초 매달려 있습니다.</li></ol>'+
+ '<p><b>앱에서</b></p><ol>'+
+ '<li><b>1번</b>: 종목 "중량 풀업", 체중, 추가 중량을 넣습니다. 영상 선택 후 분석 간격은 60회로 둡니다.</li>'+
+ '<li><b>2번 분석 구간</b>: 첫 반복 직전 <b>팔을 다 펴고 매달려 멈춘 프레임</b>에서 "현재 시점을 시작으로", 마지막 반복이 끝나고 다시 팔이 다 펴진 뒤에 "현재 시점을 끝으로"를 누릅니다. 10프레임 버튼으로 크게, 1프레임 버튼으로 세밀하게 맞춥니다.</li>'+
+ '<li><b>3번 기준 길이</b>: 원판의 <b>위 끝과 아래 끝</b>을 찍고 45를 넣습니다. 원판이 없는 맨몸이면 1m 막대를 바 아래 몸이 있을 자리에 세워 영상 처음에 찍고, 그 프레임에서 막대 양 끝을 찍은 뒤 100을 넣습니다.</li>'+
+ '<li><b>4번 추적할 점</b>: 속도만 보려면 "머리 추적점만", 끝까지 내려왔는지 보려면 "팔꿈치 각도"를 고릅니다. 시작 프레임에서 아래 순서로 찍습니다.<ul>'+
+ '<li><b>머리 추적점</b>: 옆에서 찍었으면 턱 끝, 뒤에서 찍었으면 뒤통수 가운데</li>'+
+ '<li><b>어깨</b>: 어깨 끝 뼈 바로 아래 둥근 부분의 가운데</li>'+
+ '<li><b>팔꿈치</b>: 팔꿈치 바깥쪽 뼈 가운데</li>'+
+ '<li><b>손목</b>: 새끼손가락 쪽 손목 뼈</li></ul></li>'+
+ '<li><b>바 높이</b>는 옆에서 찍었을 때만 찍습니다. 뒤에서 찍으면 턱이 안 보여 판정할 수 없습니다.</li>'+
+ '<li><b>5번 분석 시작</b> → 끝나면 재생 막대로 훑어보며 점이 어긋난 곳이 있는지 봅니다. 어긋났으면 그 프레임에서 "고칠 점"을 고르고 "현재 시점부터 위치 고치기"로 다시 찍습니다.</li></ol>'+
+ '<p><b>결과 보는 법</b>: 반복별 <b>평균 속도</b>와 <b>속도 저하</b>가 핵심입니다. 같은 무게에서 평균 속도가 오르면 힘이 늘었다는 뜻입니다. 사선 뒤에서 찍은 영상은 m/s 값이 실제와 몇 % 다를 수 있으니, 같은 자리에서 찍은 본인 기록끼리만 비교하세요.</p></div></div>'+
+ '<div class="card"><h2>CMJ 따라 하기</h2><div class="prose">'+
+ '<p><b>찍기 전</b></p><ol>'+
+ '<li>카메라를 <b>몸 옆 정면(90°)</b>, 무릎~허리 높이에 고정합니다. 발끝과 바닥이 꼭 보여야 합니다.</li>'+
+ '<li><b>120fps 이상 슬로모션</b>으로 찍습니다.</li>'+
+ '<li>뛸 자리에 1m 막대를 세워 영상 처음 1~2초에 찍히게 한 뒤 치웁니다.</li>'+
+ '<li>손은 허리에 고정하고, <b>1초 가만히 선 뒤</b> 뜁니다. 착지는 무릎을 편 채 발끝부터 닿고, 착지 뒤 1초 더 찍습니다.</li></ol>'+
+ '<p><b>앱에서</b></p><ol>'+
+ '<li><b>1번</b>: 종목 "CMJ", 체중을 넣습니다. 영상이 슬로모션으로 재생되면 영상 속도의 배율을 맞추고, 분석 간격은 영상 fps에 맞춥니다(120 또는 240).</li>'+
+ '<li><b>2번 분석 구간</b>: <b>가만히 서 있는 구간 안</b>, 무릎이 굽기 시작하기 약 0.5초 전 프레임에서 "현재 시점을 시작으로"를 누릅니다. 착지 후 0.5초쯤에서 "현재 시점을 끝으로"를 누릅니다. 시작 직후 0.25초 동안 몸이 움직이면 안 됩니다.</li>'+
+ '<li><b>3번 기준 길이</b>: 막대가 보이는 프레임으로 가서 막대의 위 끝, 아래 끝을 찍고 100을 넣습니다. 점프 높이는 시간으로 재기 때문에 이 값과 상관없습니다.</li>'+
+ '<li><b>4번 추적할 점</b>: 높이만 보려면 "골반 + 발끝", 무릎 각도까지 보려면 "골반 + 무릎·발목·발끝"을 고르고, 시작 프레임(선 자세)에서 아래 순서로 찍습니다.<ul>'+
+ '<li><b>골반</b>: 허벅지 맨 위 바깥쪽 뼈(대전자). 바지 로고·솔기가 그 근처에 있으면 거기</li>'+
+ '<li><b>무릎</b>: 무릎 바깥쪽 측면 가운데. 슬개골(앞쪽)이 아닙니다</li>'+
+ '<li><b>발목</b>: 바깥 복사뼈 가운데</li>'+
+ '<li><b>발끝</b>: 신발 앞코 끝, 바닥에 닿는 점</li></ul></li>'+
+ '<li><b>5번 분석 시작</b> → 결과의 "현재 이륙·착지"가 맞는지 영상으로 확인합니다. 틀리면 발끝이 바닥에서 떨어진 첫 프레임에서 "현재 프레임을 이륙으로", 다시 닿은 첫 프레임에서 "현재 프레임을 착지로"를 누릅니다.</li></ol>'+
+ '<p><b>결과 보는 법</b>: <b>점프 높이</b>(체공 시간)가 핵심입니다. 같은 높이를 더 짧은 시간에 만들면 <b>RSImod</b>가 올라갑니다. 마커 없이 찍은 무릎 각도는 몇 도씩 흔들릴 수 있으니 참고값으로 보세요.</p></div></div>'+
  '<div class="card"><h2>공통 촬영 조건</h2><div class="prose"><ul>'+
  '<li><b>카메라 고정</b> 삼각대나 받침에 세워 둡니다. 손으로 들고 찍으면 카메라 흔들림이 그대로 속도로 계산됩니다.</li>'+
  '<li><b>옆에서 직각으로</b> 움직임이 화면과 평행해야 합니다. 비스듬하면 이동 거리와 속도가 실제보다 작게 나옵니다.</li>'+
