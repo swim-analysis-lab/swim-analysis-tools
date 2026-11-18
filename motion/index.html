@@ -42,6 +42,7 @@ button,select,input,textarea{font:inherit;color:inherit;letter-spacing:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .wrap{max-width:1120px;margin:0 auto;padding:0 20px 80px}
 header.top{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px 16px;padding:22px 0 14px}
+.apps{display:flex;flex-wrap:wrap;gap:4px 16px;margin:0 0 8px;font-size:12.5px}.apps a{color:var(--muted);text-decoration:none;padding:2px 0}.apps a:hover{color:var(--accent)}
 header.top .brand{display:block;font-family:var(--font-num);font-size:12px;font-weight:600;letter-spacing:.16em;color:var(--muted);margin-bottom:2px}
 header.top .where{font-size:12px;color:var(--muted);margin-left:auto;display:flex;align-items:center;gap:7px;padding-bottom:2px}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
@@ -174,9 +175,12 @@ header.top .where .btn{margin-left:6px;min-height:28px;padding:3px 10px;font-siz
 <video id="vid" playsinline muted preload="auto"></video>
 <div class="wrap">
   <header class="top">
-    <div><span class="brand">SWIM ANALYSIS LAB</span><h1>동작 궤적·속도 분석</h1></div>
+    <div><nav class="apps" aria-label="다른 화면"><a href="../" data-path="">← 처음 화면</a><a href="../streamline/" data-path="streamline/">스트림라인 자세 분석 →</a></nav><span class="brand">SWIM ANALYSIS LAB</span><h1>동작 궤적·속도 분석</h1></div>
     <div class="where" id="where"><span class="dot"></span><span>저장 위치 확인 중</span></div>
   </header>
+<script>/* 처음 화면·다른 앱 링크: GitHub Pages나 파일로 열면 상대 경로, claude.ai 아티팩트 등 다른 곳에서는 사이트 주소로 */
+(function(){const h=location.hostname;if(location.protocol==='file:'||/github\.io$/.test(h))return;const base='https://swim-analysis-lab.github.io/swim-analysis-tools/';document.querySelectorAll('.apps a[data-path]').forEach(a=>{a.href=base+a.dataset.path})})();</script>
+
   <nav class="tabs" aria-label="화면">
     <a href="#analyze" data-v="analyze"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.2v5.6l4.6-2.8z" fill="currentColor" stroke="none"/></svg><span>분석</span></a>
     <a href="#records" data-v="records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16"/><path d="M7 16v-5M12 16V7M17 16v-8"/></svg><span>기록·비교</span></a>
@@ -607,9 +611,14 @@ function paint(){const cv=$('#cv');if(!cv)return;const c=cv.getContext('2d');
 
 /* ----- 점 찍기(확대경) ----- */
 function cvPos(e){const cv=$('#cv'),b=cv.getBoundingClientRect();return [Math.max(0,Math.min(V.cw-1,(e.clientX-b.left)/b.width*V.cw)),Math.max(0,Math.min(V.ch-1,(e.clientY-b.top)/b.height*V.ch)),b]}
+/* 확대경 자리: 위 → 왼쪽 → 오른쪽 → 아래 순서로, 영상 안에 다 들어가고 누른 점을 가리지 않는 곳. 가로 영상처럼 높이가 낮으면 옆에 띄움 */
+function placeLoupe(lp,px,py,W,H){const S=128,g=34,cand=[[px-S/2,py-S-g],[px-S-g,py-S/2],[px+g,py-S/2],[px-S/2,py+g]];let best=null,bv=-1;
+  for(const [x0,y0] of cand){const x=Math.max(0,Math.min(W-S,x0)),y=Math.max(0,Math.min(H-S,y0)),dx=Math.max(x-px,0,px-(x+S)),dy=Math.max(y-py,0,py-(y+S)),cl=Math.hypot(dx,dy);
+    if(cl>=g*.6){best=[x,y];break}if(cl>bv){bv=cl;best=[x,y]}}
+  lp.style.left=best[0]+'px';lp.style.top=best[1]+'px';lp.style.display='block'}
 function loupeAt(p,b){const lp=$('#loupe');if(!lp)return;const c=lp.getContext('2d'),z=2.8,disp=b.width/V.cw,src=128/(z*disp);c.fillStyle='#000';c.fillRect(0,0,256,256);c.drawImage(wk,p[0]-src/2,p[1]-src/2,src,src,0,0,256,256);
   c.strokeStyle='rgba(255,255,255,.95)';c.lineWidth=2;c.beginPath();c.moveTo(128,92);c.lineTo(128,118);c.moveTo(128,138);c.lineTo(128,164);c.moveTo(92,128);c.lineTo(118,128);c.moveTo(138,128);c.lineTo(164,128);c.stroke();
-  const px=p[0]*disp,py=p[1]*disp;let lx=px-64,ly=py-152;if(ly<-20)ly=py+36;lx=Math.max(-10,Math.min(b.width-118,lx));lp.style.left=lx+'px';lp.style.top=ly+'px';lp.style.display='block'}
+  placeLoupe(lp,p[0]*disp,p[1]*disp,b.width,b.height)}
 function bindStage(){const st=$('#stage');if(!st)return;let down=false;
   st.addEventListener('pointerdown',e=>{if(!V.mode||!V.has||V.busy)return;down=true;try{st.setPointerCapture(e.pointerId)}catch(x){}const [x,y,b]=cvPos(e);V.tmp=[x,y];paint();loupeAt(V.tmp,b);e.preventDefault()});
   st.addEventListener('pointermove',e=>{if(!down)return;const [x,y,b]=cvPos(e);V.tmp=[x,y];paint();loupeAt(V.tmp,b)});
