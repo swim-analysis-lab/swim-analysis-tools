@@ -541,10 +541,13 @@ async function runAuto(){const d=S.draft,img=$('#stageImg');if(!d||d.ex||!img)re
 function newDraftFromExample(){const e=examples()[1];return {id:null,ex:true,mode:'full',date:today(),note:'',front:'right',W:e.W,H:e.H,photo:e.photo,pts:JSON.parse(JSON.stringify(e.pts)),target:null}}
 function nextTarget(d){const p=ptsFor(d.mode).find(p=>!d.pts[p.k]);return p?p.k:null}
 const OPT_WHY={finger:'손목 꺾임 측정용. 손끝이 천장에 닿아 꺾였거나 화면 밖이면 건너뛰세요',thigh:'골반 각 측정용',back:'허리 아치 측정용',lumbar:'허리 아치 측정용',butt:'허리 아치 측정용',rib:'갈비 돌출 측정용'};
+/* 사진이 저장되지 않은 기록을 고칠 때 쓰는 빈 바탕(원래 사진 비율) */
+function blankPhoto(W,H){const w=600,h=Math.max(1,Math.round(600*(H||1000)/(W||600))),c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');x.fillStyle='#2a2e34';x.fillRect(0,0,w,h);x.strokeStyle='rgba(255,255,255,.07)';for(let i=0;i<w;i+=50){x.beginPath();x.moveTo(i,0);x.lineTo(i,h);x.stroke()}for(let j=0;j<h;j+=50){x.beginPath();x.moveTo(0,j);x.lineTo(w,j);x.stroke()}return c.toDataURL('image/jpeg',.8)}
 function viewMeasure(){if(!S.draft)S.draft=newDraftFromExample();const d=S.draft;
   return '<section class="measure">'+
   '<div class="card editor">'+
     (d.ex?'<div class="banner">지금 보이는 것은 예시 그림입니다. 내 측면 사진을 선택하면 바뀝니다.</div>':'')+
+    (d.id?'<div class="banner"><b>'+esc(d.date)+'</b> 기록을 고치는 중입니다. 아래 <b>고친 내용 저장</b>을 누르면 기존 기록이 바뀝니다.'+(d.nophoto?' 사진이 저장되지 않은 기록이라 빈 바탕 위에서 점을 고칩니다.':'')+' <button class="btn sm" type="button" id="editCancel">고치기 취소</button></div>':'')+
     '<div class="row"><label class="btn primary pick">'+(d.ex?'측면 사진 선택':'다른 사진으로 바꾸기')+'<input id="file" type="file" accept="image/*" aria-label="'+(d.ex?'측면 사진 선택':'다른 사진으로 바꾸기')+'"></label>'+
     '<span class="small muted">'+(isUp(d)?'정측면, 손목~허벅지 중간, 폰은 기울이지 않고 가슴 높이.':'정측면, 전신, 카메라는 허리 높이.')+' <a href="#guide">촬영 조건 보기</a></span></div>'+
     '<div class="row"><span class="small muted" id="modeLbl">촬영 범위</span><div class="seg" role="group" aria-labelledby="modeLbl">'+
@@ -562,7 +565,7 @@ function viewMeasure(){if(!S.draft)S.draft=newDraftFromExample();const d=S.draft
     '<div class="row"><div class="field"><label for="dDate">촬영일</label><input id="dDate" type="date" value="'+esc(d.date)+'"></div>'+
     '<div class="field" style="flex:2"><label for="dNote">메모</label><input id="dNote" type="text" maxlength="80" placeholder="예: 훈련 전, 스트레칭 4주차" value="'+esc(d.note)+'"></div></div>'+
     '<div id="mpanel"></div>'+
-    '<div class="row"><button class="btn primary" id="saveBtn" type="button">기록 저장</button><span class="small muted" id="saveHint"></span></div>'+
+    '<div class="row"><button class="btn primary" id="saveBtn" type="button">'+(d.id?'고친 내용 저장':'기록 저장')+'</button>'+(d.id?'<button class="btn" id="saveNewBtn" type="button">새 기록으로 저장</button>':'')+'<span class="small muted" id="saveHint"></span></div>'+
   '</div></section>'}
 /* 되돌리기: 사진(초안)마다 따로. 점 찍기·옮기기·지우기, 촬영 범위, 배 방향 */
 const UH={d:null,u:[],r:[]};
@@ -596,7 +599,7 @@ function updateMetrics(){const d=S.draft,m=computeMetrics(d.pts,d.W,d.H,d.front,
     if(m.arch==null)h+='<p class="small muted">허리 아치는 등 정점·허리 오목·엉덩이 정점 3점을 찍으면 계산됩니다. 허리로 보상하는지 가리려면 필요합니다.</p>';
     h+='<p class="small muted">판정 기준은 잠정값이며 공인된 규준이 아닙니다. 손으로 찍는 점은 ±2~3° 오차가 있어, 본인 기록끼리 비교하는 용도가 가장 믿을 만합니다.</p>';
   }
-  el.innerHTML=h;const sb=$('#saveBtn');if(sb){sb.disabled=!m.ok||d.ex;$('#saveHint').textContent=d.ex?'예시 그림은 저장되지 않습니다.':(m.ok?(d.id?'기존 기록을 고칩니다.':''):'필수 '+MODES[modeOf(d.mode)].req.length+'점을 찍으면 저장할 수 있습니다.')}}
+  el.innerHTML=h;const sn=$('#saveNewBtn');if(sn)sn.disabled=!m.ok;const sb=$('#saveBtn');if(sb){sb.disabled=!m.ok||d.ex;$('#saveHint').textContent=d.ex?'예시 그림은 저장되지 않습니다.':(m.ok?(d.id?'기존 기록을 고칩니다.':''):'필수 '+MODES[modeOf(d.mode)].req.length+'점을 찍으면 저장할 수 있습니다.')}}
 function stagePos(e){const b=$('#stage').getBoundingClientRect();return [Math.max(0,Math.min(1,(e.clientX-b.left)/b.width)),Math.max(0,Math.min(1,(e.clientY-b.top)/b.height)),b]}
 /* 확대경 자리: 위 → 왼쪽 → 오른쪽 → 아래 순서로, 영상 안에 다 들어가고 누른 점을 가리지 않는 곳. 가로 영상처럼 높이가 낮으면 옆에 띄움 */
 function placeLoupe(lp,px,py,W,H){const S=128,g=34,cand=[[px-S/2,py-S-g],[px-S-g,py-S/2],[px+g,py-S/2],[px-S/2,py+g]];let best=null,bv=-1;
@@ -653,7 +656,7 @@ function viewHistory(){const list=recs();if(S.trend==='line'&&!list.some(r=>!isU
    '<h3>관절선 겹쳐 보기</h3><p class="small muted">'+(isUp(a)||isUp(b)?'골반을 맞추고 몸통(골반→어깨)을 수직으로 세운 뒤 몸통+팔 길이를 같게 맞춘 것입니다.':'복사뼈를 맞추고 다리를 수직으로 세운 뒤 몸 길이를 같게 맞춘 것입니다.')+' 촬영 거리와 사진 기울기 차이는 사라지고 자세 차이만 남습니다.</p>'+skeletonSVG(a,b)+
    '<div class="tscroll"><table class="mt"><tr><th>지표</th><th style="text-align:right">이전</th><th style="text-align:right">이후</th><th style="text-align:right">변화</th></tr>'+rows+'</table></div></div>'+
   '<div class="card"><h2>기록 '+list.length+'건</h2><div class="recs">'+list.slice().reverse().map(r=>{const m=M(r);return '<div class="rec"><div data-shot="'+r.id+'" data-tiny="1">'+shotHTML(r,S.photos.get(r.id)||r.photo,'',true)+'</div><div><div class="row"><b class="num">'+esc(r.date)+'</b>'+(m.ok?(isUp(r)?'<span class="small muted">상체</span><span class="num">'+f1(m.upLine)+'%</span>'+pillHTML('upLine',m.upLine):'<span class="num">'+f1(m.line)+'%</span>'+pillHTML('line',m.line)):'')+'</div><div class="small muted">'+esc(r.note||'메모 없음')+'</div>'+
-    (r.ex?'':'<div class="row" style="margin-top:6px"><button class="btn sm" type="button" data-edit="'+r.id+'">마커 수정</button><button class="btn sm" type="button" data-plan="'+r.id+'">추천 보기</button>'+(S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button><button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>')+'</div>')+'</div></div>'}).join('')+'</div></div>'}
+    (r.ex?'':'<div class="row" style="margin-top:6px"><button class="btn sm" type="button" data-edit="'+r.id+'">수정</button><button class="btn sm" type="button" data-plan="'+r.id+'">추천 보기</button>'+(S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button><button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>')+'</div>')+'</div></div>'}).join('')+'</div></div>'}
 async function fillShots(){const list=recs();for(const el of document.querySelectorAll('[data-shot]')){const r=list.find(x=>x.id===el.dataset.shot);if(!r||r.ex||el.querySelector('img'))continue;const p=await Store.photo(r);if(p&&el.isConnected&&!el.querySelector('img'))el.innerHTML=shotHTML(r,p,el.dataset.tag||'',!!el.dataset.tiny)}}
 
 /* ===== 운동 추천 화면 ===== */
@@ -709,22 +712,23 @@ function render(){const v=S.view;document.querySelectorAll('nav.tabs a').forEach
 function refresh(){whereUI();if(S.view!=='measure')render()}
 function route(){const h=(location.hash||'').replace('#','');S.view=['measure','history','plan','guide'].includes(h)?h:'measure';S.delAsk=null;render();window.scrollTo(0,0)}
 window.addEventListener('hashchange',route);
-document.addEventListener('click',async e=>{const t=e.target.closest('#autoBtn,[data-pt],[data-mode],[data-front],[data-clear],[data-edit],[data-plan],[data-del],[data-del2],[data-delno],#saveBtn,#undoBtn,#redoBtn');if(!t)return;const d=S.draft;
+document.addEventListener('click',async e=>{const t=e.target.closest('#autoBtn,[data-pt],[data-mode],[data-front],[data-clear],[data-edit],[data-plan],[data-del],[data-del2],[data-delno],#saveBtn,#saveNewBtn,#editCancel,#undoBtn,#redoBtn');if(!t)return;const d=S.draft;
+  if(t.id==='editCancel'){S.draft=null;render();return}
   if(t.id==='undoBtn'||t.id==='redoBtn'){undoD(t.id==='redoBtn');return}
   if(t.dataset.pt){d.target=t.dataset.pt;updateStage()}
   else if(t.dataset.mode){if(modeOf(d.mode)===t.dataset.mode)return;remember('촬영 범위 변경');d.mode=t.dataset.mode;const keep=MODES[d.mode].pts;Object.keys(d.pts).forEach(k=>{if(keep.indexOf(k)<0)delete d.pts[k]});if(d.auto)d.auto=d.auto.filter(k=>d.pts[k]);d.target=nextTarget(d);render()}
   else if(t.dataset.front){if(d.front!==t.dataset.front)remember('배 방향 변경');d.front=t.dataset.front;document.querySelectorAll('[data-front]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.front===d.front));updateStage()}
   else if(t.dataset.clear){remember(PNAME[t.dataset.clear]+' 지우기');delete d.pts[t.dataset.clear];if(d.auto)d.auto=d.auto.filter(x=>x!==t.dataset.clear);updateStage()}
   else if(t.id==='autoBtn'){if(!S.autoBusy)runAuto()}
-  else if(t.dataset.edit){const r=S.recs.find(x=>x.id===t.dataset.edit);if(!r)return;const p=await Store.photo(r);if(!p){toast('이 기록은 사진이 저장되지 않아 마커를 고칠 수 없습니다.');return}S.draft={id:r.id,auto:(r.auto||[]).slice(),mode:modeOf(r.mode),date:r.date,note:r.note||'',front:r.front,W:r.W,H:r.H,photo:p,pts:JSON.parse(JSON.stringify(r.pts)),target:null,created:r.created};location.hash='#measure';if(S.view==='measure')render()}
+  else if(t.dataset.edit){const r=S.recs.find(x=>x.id===t.dataset.edit);if(!r)return;let p=await Store.photo(r),np=false;if(!p){p=blankPhoto(r.W,r.H);np=true}S.draft={nophoto:np,id:r.id,auto:(r.auto||[]).slice(),mode:modeOf(r.mode),date:r.date,note:r.note||'',front:r.front,W:r.W,H:r.H,photo:p,pts:JSON.parse(JSON.stringify(r.pts)),target:null,created:r.created};location.hash='#measure';if(S.view==='measure')render()}
   else if(t.dataset.plan){S.planRec=t.dataset.plan;location.hash='#plan'}
   else if(t.dataset.del){S.delAsk=t.dataset.del;render()}
   else if(t.dataset.delno){S.delAsk=null;render()}
   else if(t.dataset.del2){S.delAsk=null;await Store.remove(t.dataset.del2);render();toast('기록을 삭제했습니다.')}
-  else if(t.id==='saveBtn'){const m=computeMetrics(d.pts,d.W,d.H,d.front,d.mode);if(!m.ok||d.ex)return;t.disabled=true;
+  else if(t.id==='saveBtn'||t.id==='saveNewBtn'){const asNew=t.id==='saveNewBtn';const m=computeMetrics(d.pts,d.W,d.H,d.front,d.mode);if(!m.ok||d.ex)return;t.disabled=true;
     const md=modeOf(d.mode),pts={};MODES[md].pts.forEach(k=>{if(d.pts[k])pts[k]=d.pts[k]});
-    const rec={id:d.id||('rec_'+Date.now().toString(36)),mode:md,date:d.date||today(),note:(d.note||'').slice(0,80),front:d.front,W:d.W,H:d.H,pts,hasPhoto:true,created:d.created||Date.now(),v:1};const au=(d.auto||[]).filter(k=>pts[k]);if(au.length)rec.auto=au;
-    const res=await Store.save(rec,d.photo);
+    const rec={id:(!asNew&&d.id)||('rec_'+Date.now().toString(36)),mode:md,date:d.date||today(),note:(d.note||'').slice(0,80),front:d.front,W:d.W,H:d.H,pts,hasPhoto:!d.nophoto,created:(!asNew&&d.created)||Date.now(),v:1};const au=(d.auto||[]).filter(k=>pts[k]);if(au.length)rec.auto=au;
+    const res=await Store.save(rec,d.nophoto?null:d.photo);
     if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}
     if(Store.mode!=='cloud'||res==='local'){if(!S.recs.find(x=>x.id===rec.id))S.recs=LS.get('sl_recs',S.recs)}
     else if(!S.recs.find(x=>x.id===rec.id))S.recs=S.recs.concat([rec]);else S.recs=S.recs.map(x=>x.id===rec.id?rec:x);

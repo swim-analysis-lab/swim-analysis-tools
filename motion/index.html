@@ -42,6 +42,7 @@ button,select,input,textarea{font:inherit;color:inherit;letter-spacing:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .wrap{max-width:1120px;margin:0 auto;padding:0 20px 80px}
 header.top{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px 16px;padding:22px 0 14px}
+.editbox{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:6px 0 14px}.editbox h3{margin-top:0}
 .apps{display:flex;flex-wrap:wrap;gap:4px 16px;margin:0 0 8px;font-size:12.5px}.apps a{color:var(--muted);text-decoration:none;padding:2px 0}.apps a:hover{color:var(--accent)}
 header.top .brand{display:block;font-family:var(--font-num);font-size:12px;font-weight:600;letter-spacing:.16em;color:var(--muted);margin-bottom:2px}
 header.top .where{font-size:12px;color:var(--muted);margin-left:auto;display:flex;align-items:center;gap:7px;padding-bottom:2px}
@@ -434,7 +435,7 @@ const PHINT={hip:'<b>골반</b>: 허벅지 맨 위 바깥쪽 뼈(대전자). 수
 const PHINT_SP={start:{toe:'<b>앞발 발끝</b>: 출발대 앞 끝에 건 발가락 끝. 이 점 주변 화면으로 출발대를 떠난 순간을 잽니다.'}},phint=k=>(PHINT_SP[V.sport]||{})[k]||PHINT[k];
 const winOf=()=>SPORT[V.sport].win||(V.sport==='cmj'?.03:.06);
 const ptList=()=>[['main',SPORT[V.sport].main]].concat(PRESET[V.preset].pts),ptPos=k=>k==='main'?V.target:(V.extra[k]||null),allSet=()=>ptList().every(p=>ptPos(p[0]));
-const S={recs:[],view:'analyze',sel:null,delAsk:null,rsp:null};
+const S={recs:[],view:'analyze',sel:null,delAsk:null,rsp:null,edit:null,editRec:null};
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}}};
 let toastT;function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(toastT);toastT=setTimeout(()=>t.style.display='none',3800)}
 
@@ -452,8 +453,8 @@ const Store={mode:'checking',col:null,migrated:false,
       this.mode='cloud';S.recs=recs;if(!this.migrated&&!snap.metadata.fromCache){this.migrated=true;this.migrate(recs)}refresh();
     },()=>{clearTimeout(timer);this.mode='local';S.recs=LS.get('mv_recs',[]);refresh()})},
   async migrate(cloud){const local=LS.get('mv_recs',[]);if(!local.length)return;const left=[];for(const r of local){if(cloud.find(c=>c.id===r.id))continue;try{await this.col.doc(r.id).set(r)}catch(e){left.push(r)}}LS.set('mv_recs',left)},
-  async save(rec){if(this.mode==='cloud'){try{await this.col.doc(rec.id).set(rec);if(!S.recs.find(x=>x.id===rec.id))S.recs=S.recs.concat([rec]);return 'cloud'}catch(e){}}
-    const a=LS.get('mv_recs',[]).filter(r=>r.id!==rec.id);a.push(rec);if(!LS.set('mv_recs',a))return 'fail';if(this.mode!=='cloud')S.recs=a;else S.recs=S.recs.concat([rec]);return 'local'},
+  async save(rec){if(this.mode==='cloud'){try{await this.col.doc(rec.id).set(rec);S.recs=S.recs.filter(x=>x.id!==rec.id).concat([rec]);return 'cloud'}catch(e){}}
+    const a=LS.get('mv_recs',[]).filter(r=>r.id!==rec.id);a.push(rec);if(!LS.set('mv_recs',a))return 'fail';if(this.mode!=='cloud')S.recs=a;else S.recs=S.recs.filter(x=>x.id!==rec.id).concat([rec]);return 'local'},
   async remove(id){const a=LS.get('mv_recs',[]),inLocal=a.find(r=>r.id===id);if(inLocal)LS.set('mv_recs',a.filter(r=>r.id!==id));
     if(this.mode==='cloud'&&!inLocal){try{await this.col.doc(id).delete()}catch(e){toast('삭제하지 못했습니다. 연결 상태를 확인해 주세요.');return}}
     S.recs=S.recs.filter(r=>r.id!==id)}
@@ -518,14 +519,16 @@ function seekTo(t){return new Promise(res=>{t=Math.max(0,Math.min(V.dur-.001,t))
   if(vid.requestVideoFrameCallback)vid.requestVideoFrameCallback((now,md)=>{gf=true;if(md&&typeof md.mediaTime==='number')mt=md.mediaTime;chk()});
   vid.addEventListener('seeked',()=>{gs=true;chk();setTimeout(fin,150)},{once:true});vid.currentTime=t;setTimeout(fin,2500)})}
 function grab(){if(V.has&&vid.readyState>=2&&wctx)wctx.drawImage(vid,0,0,V.cw,V.ch)}
-async function loadFile(file){stopPlay();if(vid.src&&vid.src.indexOf('blob:')===0)URL.revokeObjectURL(vid.src);vid.src=URL.createObjectURL(file);vid.load();
+async function loadFile(file){stopPlay();V.vname=file.name||'';if(vid.src&&vid.src.indexOf('blob:')===0)URL.revokeObjectURL(vid.src);vid.src=URL.createObjectURL(file);vid.load();
   try{await once(vid,'loadedmetadata')}catch(e){toast('이 영상은 브라우저에서 열 수 없습니다. MP4(H.264)로 다시 시도해 주세요.');return}
   const vw=vid.videoWidth,vh=vid.videoHeight,sc=Math.min(1,720/Math.max(vw,vh));if(!vw||!isFinite(vid.duration)){toast('영상 정보를 읽지 못했습니다.');return}
   V.cw=Math.round(vw*sc);V.ch=Math.round(vh*sc);wk.width=V.cw;wk.height=V.ch;wctx=wk.getContext('2d',{willReadFrequently:true});
   resetUndo();V.has=true;V.dur=vid.duration;V.t0=0;V.t1=Math.min(V.dur,30);V.cur=0;V.track=null;V.res=null;V.rep=null;V.target=null;V.extra={};V.bar=null;V.man={};V.cal={a:null,b:null,cm:V.cal.cm||SPORT[V.sport].cm};V.mode=null;
   try{await vid.play();vid.pause()}catch(e){}
   try{if(vid.readyState<2)await once(vid,'loadeddata',6000)}catch(e){}
-  await seekTo(0);grab();render()}
+  await seekTo(0);grab();
+  if(V.pending){const P=V.pending;V.pending=null;applySetup(P);render();if(pxPerM()&&allSet()){toast('저장해 둔 설정으로 다시 분석합니다.');runTrack(null)}else toast(P.setup?'저장해 둔 설정을 불러왔습니다. 빠진 단계를 마저 설정해 주세요.':'이 기록은 설정이 저장되기 전 기록입니다. 처음부터 설정해 주세요.');return}
+  render()}
 let seekBusy=false,seekNext=null;
 async function setCur(t){V.cur=Math.max(0,Math.min(V.dur,t));if(!V.has){paint();return}if(seekBusy){seekNext=V.cur;return}seekBusy=true;await seekTo(V.cur);grab();paint();seekBusy=false;if(seekNext!=null){const n=seekNext;seekNext=null;setCur(n)}}
 function stopPlay(){if(V.playing){V.playing=false;try{vid.pause()}catch(e){}}const b=$('#playBtn');if(b)b.textContent='재생'}
@@ -744,12 +747,25 @@ function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has,R
   if(!demo&&V.sport==='start'){const R=V.rep,f=v=>v==null?'–':f2(v);h+='<h3>시점 지정</h3><p class="small">출발 신호 <b class="num">'+f(R&&R.sig)+'</b> · 이탈 <b class="num">'+f(R&&R.dep)+'</b>'+(R&&R.depSrc?' <span class="pill n">'+{manual:'직접',toe:'발끝 자동',vel:'참고'}[R.depSrc]+'</span>':'')+' · 입수 <b class="num">'+f(R&&R.ent)+'</b>'+(R&&R.entSrc?' <span class="pill n">'+{manual:'직접',auto:'수면선 자동'}[R.entSrc]+'</span>':'')+' · 브레이크아웃 <b class="num">'+f(R&&R.bo&&R.bo.t)+'</b>초</p>'+
     '<div class="row"><button class="btn sm" type="button" id="mkSig">현재 프레임을 출발 신호로</button><button class="btn sm" type="button" id="mkDep">현재 프레임을 출발대 이탈로</button><button class="btn sm" type="button" id="mkEnt">현재 프레임을 입수로</button><button class="btn sm'+(V.mode==='bo'?' on':'')+'" type="button" id="boBtn">브레이크아웃 위치 찍기</button>'+(Object.keys(V.man).length?'<button class="btn sm" type="button" id="manReset">직접 지정 모두 지우기</button>':'')+'</div>'+
     '<p class="small muted">출발 신호는 불빛이 켜진 프레임(없으면 소리가 시작된 프레임)입니다. 휴대폰 영상은 소리가 0.1~0.2초 늦게 녹음될 수 있습니다. 이탈은 앞발이 출발대에서 떨어진 첫 프레임, 입수는 머리가 물에 잠기기 시작한 프레임입니다. 브레이크아웃은 머리가 수면 위로 처음 보이는 프레임으로 옮긴 뒤 머리를 누르세요.</p>'}
-  if(!demo)h+='<div class="row">'+(ptList().length>1?'<div class="field" style="max-width:150px"><label for="fixSel">고칠 점</label><select id="fixSel">'+ptList().map(p=>'<option value="'+p[0]+'"'+(V.fixK===p[0]?' selected':'')+'>'+p[1]+'</option>').join('')+'</select></div>':'')+'<button class="btn'+(V.mode==='fix'?' on':'')+'" type="button" id="fixBtn">현재 시점부터 위치 고치기</button><button class="btn primary" type="button" id="saveBtn">기록 저장</button></div>';
+  if(!demo)h+='<div class="row">'+(ptList().length>1?'<div class="field" style="max-width:150px"><label for="fixSel">고칠 점</label><select id="fixSel">'+ptList().map(p=>'<option value="'+p[0]+'"'+(V.fixK===p[0]?' selected':'')+'>'+p[1]+'</option>').join('')+'</select></div>':'')+'<button class="btn'+(V.mode==='fix'?' on':'')+'" type="button" id="fixBtn">현재 시점부터 위치 고치기</button><button class="btn primary" type="button" id="saveBtn">'+(S.editRec?'고친 내용 저장':'기록 저장')+'</button>'+(S.editRec?'<button class="btn" type="button" id="saveNewBtn">새 기록으로 저장</button>':'')+'</div>';
   return h+'</div>'}
 function guideText(){if(V.busy)return '추적 중입니다 '+V.prog;if(!V.has)return '예시 궤적입니다. 재생하거나 막대를 움직여 보세요. 내 영상을 선택하면 바뀝니다.';
   return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:V.sport==='start'?'<b>수면</b>(물 표면이 닿는 높이, 레인로프가 떠 있는 선)을 누르세요. 머리가 이 선 아래로 내려간 순간을 입수로 봅니다.':'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',bo:'브레이크아웃 순간(머리가 수면 위로 처음 보이는 프레임)에서 <b>머리 위치</b>를 누르세요. 그 시각과 출발벽에서의 거리를 기록합니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(phint(ptList()[V.tIdx][0])||'관절 중심을 찍습니다.'))+' 누른 채 움직이면 확대경이 나옵니다.',fix:'이 시점의 <b>'+((ptList().find(q=>q[0]===V.fixK)||['','점'])[1])+'</b> 올바른 위치를 누르세요. 여기서부터 끝까지 다시 추적합니다.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
+/* 기록 고치기: 분석 설정(점·구간·기준 길이·수면/바·직접 지정 시점)을 기록에 함께 저장해 두고, 같은 영상을 다시 고르면 불러옴 */
+const cpo=o=>o==null?o:JSON.parse(JSON.stringify(o));
+function setupOf(){return {sport:V.sport,preset:V.preset,rate:V.rate,slow:V.slow,half:V.half,t0:V.t0,t1:V.t1,cal:cpo(V.cal),bar:cpo(V.bar),target:cpo(V.target),extra:cpo(V.extra),man:cpo(V.man),cw:V.cw,ch:V.ch,vname:V.vname||'',vdur:Math.round(V.dur*1000)/1000}}
+function applySetup(rec){V.sport=rec.sport||V.sport;V.body=rec.body?String(rec.body):'';V.mass=rec.mass?String(rec.mass):'';if(rec.sport==='free')V.name=rec.name||'';
+  const P=rec.setup;if(!P){V.preset=SPORT[V.sport].presets[0];V.rate=SPORT[V.sport].rate;return}
+  const kx=P.cw?V.cw/P.cw:1,ky=P.ch?V.ch/P.ch:1,sc=q=>q?[q[0]*kx,q[1]*ky]:q;
+  V.preset=PRESET[P.preset]&&SPORT[V.sport].presets.includes(P.preset)?P.preset:SPORT[V.sport].presets[0];V.rate=P.rate||SPORT[V.sport].rate;V.slow=P.slow||1;V.half=P.half||V.half;
+  V.t0=Math.max(0,Math.min(V.dur-.2,P.t0||0));V.t1=Math.max(V.t0+.2,Math.min(V.dur,P.t1||V.dur));
+  V.cal={a:sc(P.cal&&P.cal.a),b:sc(P.cal&&P.cal.b),cm:P.cal&&P.cal.cm||SPORT[V.sport].cm};V.bar=sc(P.bar);V.target=sc(P.target);V.extra={};Object.keys(P.extra||{}).forEach(k=>V.extra[k]=sc(P.extra[k]));
+  V.man=cpo(P.man)||{};if(V.man.bo){V.man.bo.x*=kx;V.man.bo.y*=ky}V.track=null;V.res=null;V.rep=null;
+  if(P.vdur&&Math.abs(P.vdur-V.dur)>.15)toast('영상 길이가 저장할 때와 다릅니다('+f2(P.vdur)+'초 → '+f2(V.dur)+'초). 같은 영상인지 확인해 주세요.')}
+function editBanner(){const r=S.editRec&&S.recs.find(x=>x.id===S.editRec);if(!r)return '';const P=r.setup;
+  return '<div class="banner"><b>'+esc(r.date)+' '+esc(r.name)+'</b> 기록을 고치는 중입니다. '+(V.has&&!V.pending?'결과를 확인한 뒤 아래 <b>고친 내용 저장</b>을 누르면 기존 기록이 바뀝니다.':(P?'같은 영상'+(P.vname?'(<b>'+esc(P.vname)+'</b>)':'')+'을 선택하면 저장해 둔 점·구간·기준 길이를 불러와 다시 분석합니다.':'이 기록은 설정이 저장되기 전 기록이라, 같은 영상을 고른 뒤 처음부터 다시 설정해야 합니다.'))+' <button class="btn sm" type="button" id="editCancel">고치기 취소</button></div>'}
 function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disabled';
-  return '<div class="cols"><div class="card editor">'+
+  return '<div class="cols"><div class="card editor">'+editBanner()+
    '<div class="row"><label class="btn primary pick">'+(V.has?'다른 영상 선택':'영상 선택')+'<input id="file" type="file" accept="video/*" aria-label="'+(V.has?'다른 영상 선택':'영상 선택')+'"></label><span class="small muted">카메라를 고정하고 옆에서 찍은 영상. <a href="#guide">촬영 조건 보기</a></span></div>'+
    '<div class="stagebox"><div class="stage" id="stage"><canvas id="cv" width="'+V.cw+'" height="'+V.ch+'"></canvas><canvas id="loupe" width="256" height="256"></canvas></div></div>'+
    '<div class="row"><button class="btn sm" type="button" id="playBtn">재생</button><div style="flex:1;min-width:120px"><label for="scrub" class="small muted" style="display:none">시점</label><input id="scrub" type="range" min="0" max="'+V.dur+'" step="0.005" value="'+V.cur+'" aria-label="영상 시점"></div><span class="small num muted" id="tlabel"></span></div>'+
@@ -771,6 +787,20 @@ function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disab
 function uiState(){const ub=$('#undoBtn');if(ub)ub.disabled=V.busy||!UH.u.length;const rd=$('#redoBtn');if(rd)rd.disabled=V.busy||!UH.r.length;const g=$('#guideLine');if(g)g.innerHTML=guideText();const st=$('#stage');if(st)st.classList.toggle('pick',!!V.mode&&V.has&&!V.busy);const sb=$('#stopBtn');if(sb)sb.disabled=!V.busy;const rb=$('#runBtn');if(rb&&V.busy)rb.disabled=true;const sc=$('#scrub');if(sc)sc.disabled=V.busy}
 
 /* ===== 기록·비교 화면 ===== */
+const noteHTML=r=>r.note?'<div class="small muted">'+esc(r.note)+'</div>':'';
+const recBtns=r=>S.delAsk===r.id?delBtn(r):'<button class="btn sm" type="button" data-edit="'+r.id+'">수정</button> '+delBtn(r);
+function editFormHTML(list){const r=S.edit&&list.find(x=>x.id===S.edit);if(!r)return '';const sw=SPORT[r.sport]&&SPORT[r.sport].swim,P=r.setup;
+  return '<div class="editbox"><h3>기록 고치기 · '+esc(r.date)+' '+esc(r.name)+'</h3><div class="row"><div class="field"><label for="eDate">날짜</label><input id="eDate" type="date" value="'+esc(r.date)+'"></div>'+
+    (r.sport==='free'?'<div class="field" style="flex:2"><label for="eName">동작 이름</label><input id="eName" type="text" maxlength="30" value="'+esc(r.name)+'"></div>':'')+'</div>'+
+    (sw?'':'<div class="row">'+(r.sport!=='free'?'<div class="field"><label for="eBody">체중(kg)</label><input id="eBody" type="number" inputmode="decimal" min="0" step="0.1" value="'+(r.body||'')+'"></div>':'')+'<div class="field"><label for="eMass">'+(SPORT[r.sport]||SPORT.free).massL+'</label><input id="eMass" type="number" inputmode="decimal" min="0" step="0.1" value="'+(r.mass||'')+'"></div></div>')+
+    '<div class="row"><div class="field" style="flex:1"><label for="eNote">메모</label><input id="eNote" type="text" maxlength="80" placeholder="예: 훈련 전, 새 수영복" value="'+esc(r.note||'')+'"></div></div>'+
+    '<div class="row"><button class="btn primary" type="button" id="eSave">저장</button><button class="btn" type="button" id="eVideo">영상으로 다시 분석</button><button class="btn" type="button" id="eNo">취소</button></div>'+
+    '<p class="small muted">날짜·메모'+(sw?'':'·무게')+'는 여기서 바로 고칩니다'+(sw?'':'(무게를 바꾸면 파워 값도 다시 계산합니다)')+'. 점·구간·시점을 고치려면 <b>영상으로 다시 분석</b>을 눌러 같은 영상을 고르세요.'+(P?' 저장해 둔 설정을 불러와 바로 다시 분석합니다'+(P.vname?'(저장할 때 영상: '+esc(P.vname)+')':'')+'.':' 이 기록은 설정이 저장되기 전 기록이라 처음부터 다시 설정해야 합니다.')+'</p></div>'}
+/* 무게를 고치면 파워(무게에 비례)를 같은 비율로, Sayers 파워는 공식으로 다시 계산 */
+function remass(rec,body,mass){const tot=r=>r.sport==='free'?(r.mass||0):((r.body||0)?(r.body||0)+(r.mass||0):0),M0=tot(rec);rec.body=body;rec.mass=mass;const M1=tot(rec);let lost=false;
+  if(M0>0&&M1>0){const k=M1/M0,sc=(o,key,rd)=>{if(o&&o[key]!=null)o[key]=rd?Math.round(o[key]*k):o[key]*k};sc(rec.sum,'pPeak');sc(rec.sum,'pSimple');sc(rec.pu,'pMean');sc(rec.cmj,'pp',true)}
+  else if(M0!==M1&&(rec.sum&&rec.sum.pPeak!=null||rec.pu&&rec.pu.pMean!=null||rec.cmj&&rec.cmj.pp!=null||M1>0)){lost=true;if(M1===0){if(rec.sum){rec.sum.pPeak=null;rec.sum.pSimple=null}if(rec.pu)rec.pu.pMean=null;if(rec.cmj)rec.cmj.pp=null}}
+  if(rec.cmj&&rec.cmj.h!=null)rec.cmj.sayers=M1?Math.round(60.7*rec.cmj.h*100+45.3*M1-2055):null;return lost}
 const delBtn=r=>S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button> <button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>';
 function scatterSVG(pts,xl,yl){const W=380,H=230,L=42,R=14,T=14,B=34;let x0=Math.min.apply(null,pts.map(p=>p.x)),x1=Math.max.apply(null,pts.map(p=>p.x)),y0=0,y1=Math.max.apply(null,pts.map(p=>p.y))*1.15;
   if(x1-x0<1){x0-=5;x1+=5}const pad=(x1-x0)*.08;x0-=pad;x1+=pad;const X=v=>L+(v-x0)/(x1-x0)*(W-L-R),Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);let s='';
@@ -790,30 +820,31 @@ function lineSVG(pts,unit){const W=380,H=220,L=42,R=14,T=16,B=30,n=pts.length;le
 function pullRecHTML(list){const ok=list.filter(r=>r.pu),asc=ok.slice().sort((a,b)=>a.created-b.created);let h='<h3>무게별 최고 평균 속도</h3>';
   h+=asc.length?scatterSVG(asc.map(r=>({x:r.mass||0,y:r.pu.best})),'추가 중량 kg','m/s')+'<p class="small muted">점 하나가 기록 하나이고, 채워진 점이 가장 최근 기록입니다. 같은 추가 중량에서 점이 위로 올라가면 같은 무게를 더 빠르게 든다는 뜻이라 힘이 늘었다고 볼 수 있습니다. 무게가 여러 가지 모이면 점선(하중–속도 직선)이 그려집니다.</p>':'<p class="muted">반복이 인식된 기록이 없습니다.</p>';
   return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">추가</th><th class="v">반복</th><th class="v">최고 반복</th><th class="v">저하</th><th class="v">이동</th><th></th></tr>'+
-    list.map(r=>{const u=r.pu;return '<tr><td class="num">'+esc(r.date)+'</td><td class="v">'+(r.mass||0)+'kg</td><td class="v">'+(u?u.n+'회':'–')+'</td><td class="v">'+(u?f2(u.best):'–')+'</td><td class="v">'+(u&&u.loss!=null?f0(u.loss)+'%':'–')+'</td><td class="v">'+(u?f0(u.rom*100)+'cm':'–')+'</td><td style="text-align:right;white-space:nowrap">'+delBtn(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">최고 반복은 그날 가장 빠른 반복의 평균 속도(m/s), 저하는 최고 반복 대비 마지막 반복의 속도 저하입니다.</p>'}
+    list.map(r=>{const u=r.pu;return '<tr><td class="num">'+esc(r.date)+noteHTML(r)+'</td><td class="v">'+(r.mass||0)+'kg</td><td class="v">'+(u?u.n+'회':'–')+'</td><td class="v">'+(u?f2(u.best):'–')+'</td><td class="v">'+(u&&u.loss!=null?f0(u.loss)+'%':'–')+'</td><td class="v">'+(u?f0(u.rom*100)+'cm':'–')+'</td><td style="text-align:right;white-space:nowrap">'+recBtns(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">최고 반복은 그날 가장 빠른 반복의 평균 속도(m/s), 저하는 최고 반복 대비 마지막 반복의 속도 저하입니다.</p>'}
 function cmjRecHTML(list){const ok=list.filter(r=>r.cmj&&r.cmj.h!=null),asc=ok.slice().sort((a,b)=>a.created-b.created);let h='<h3>점프 높이 추이</h3>';
   h+=asc.length?lineSVG(asc.map(r=>({label:r.date.slice(5).replace('-','.'),v:r.cmj.h*100})),'cm')+(asc.some(r=>r.cmj.hSrc==='vel')?'<p class="small muted">체공 시간 없이 골반 속도로 계산한 기록(표에서 참고 표시)은 다른 기록보다 낮게 나오니 함께 비교하지 마세요.</p>':''):'<p class="muted">점프가 인식된 기록이 없습니다.</p>';
   return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">높이</th><th class="v">반동 깊이</th><th class="v">이륙 속도</th><th class="v">RSImod</th><th></th></tr>'+
-    list.map(r=>{const c=r.cmj||{};return '<tr><td class="num">'+esc(r.date)+(r.mass?'<div class="small muted">+'+r.mass+'kg</div>':'')+'</td><td class="v">'+(c.h!=null?f1(c.h*100)+'cm':'–')+(c.hSrc==='vel'?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+(c.depth!=null?f0(c.depth*100)+'cm':'–')+'</td><td class="v">'+f2(c.vTo)+'</td><td class="v">'+f2(c.rsi)+'</td><td style="text-align:right;white-space:nowrap">'+delBtn(r)+'</td></tr>'}).join('')+'</table></div>'}
+    list.map(r=>{const c=r.cmj||{};return '<tr><td class="num">'+esc(r.date)+noteHTML(r)+(r.mass?'<div class="small muted">+'+r.mass+'kg</div>':'')+'</td><td class="v">'+(c.h!=null?f1(c.h*100)+'cm':'–')+(c.hSrc==='vel'?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+(c.depth!=null?f0(c.depth*100)+'cm':'–')+'</td><td class="v">'+f2(c.vTo)+'</td><td class="v">'+f2(c.rsi)+'</td><td style="text-align:right;white-space:nowrap">'+recBtns(r)+'</td></tr>'}).join('')+'</table></div>'}
 function freeRecHTML(list){if(!S.sel)S.sel=list.slice(0,2).map(r=>r.id);S.sel=S.sel.filter(id=>list.find(r=>r.id===id));
   const sel=S.sel.map(id=>list.find(r=>r.id===id)),series=sel.map((r,i)=>{const k=fromRecord(r),o=Math.max(0,Math.round((k.sum.ascT0-.2)*r.fs));return {t:k.t.slice(o).map(t=>t-k.t[o]),v:k.vy.slice(o),color:COL[i],dash:i?(i===1?'6 4':'2 4'):null,rec:r}});
   return '<h3>속도 곡선 겹쳐 보기</h3>'+(series.length?chartSVG(series,'m/s',false)+'<div class="row small">'+series.map((s,i)=>'<span><svg width="26" height="8" style="vertical-align:middle"><line x1="0" x2="26" y1="4" y2="4" stroke="'+s.color+'" stroke-width="2.4"'+(s.dash?' stroke-dasharray="'+s.dash+'"':'')+'/></svg> '+esc(s.rec.date)+' '+esc(s.rec.name)+(s.rec.mass?' '+s.rec.mass+'kg':'')+'</span>').join('')+'</div><p class="small muted">수직 속도입니다. 각 기록의 가장 긴 상승 구간이 시작되기 0.2초 전을 0초로 맞췄습니다.</p>':'<p class="muted">아래에서 비교할 기록을 3개까지 고르세요.</p>')+
-  '<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>비교</th><th>날짜·동작</th><th class="v">최고</th><th class="v">평균</th><th class="v">높이</th><th></th></tr>'+list.map(r=>{const s=r.sum;return '<tr><td><input type="checkbox" id="c_'+r.id+'" data-sel="'+r.id+'"'+(S.sel.includes(r.id)?' checked':'')+' aria-label="'+esc(r.date+' '+r.name)+' 비교에 넣기"></td><td><span class="num">'+esc(r.date)+'</span><div class="small muted">'+esc(r.name)+(r.mass?' · '+r.mass+'kg':'')+(r.ang&&r.ang.length?' · '+r.ang.map(a=>esc(a.n)+' '+a.min+'–'+a.max+'°').join(', '):'')+'</div></td><td class="v">'+f2(s.vPeak)+'</td><td class="v">'+f2(s.meanAsc)+'</td><td class="v">'+f0(s.rom*100)+'cm</td><td style="text-align:right;white-space:nowrap">'+(S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button> <button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>')+'</td></tr>'}).join('')+'</table></div><p class="small muted">최고·평균은 상승 속도(m/s)입니다. 같은 동작이라도 촬영 각도와 기준 길이를 찍은 방식이 다르면 수치가 달라집니다.</p>'}
+  '<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>비교</th><th>날짜·동작</th><th class="v">최고</th><th class="v">평균</th><th class="v">높이</th><th></th></tr>'+list.map(r=>{const s=r.sum;return '<tr><td><input type="checkbox" id="c_'+r.id+'" data-sel="'+r.id+'"'+(S.sel.includes(r.id)?' checked':'')+' aria-label="'+esc(r.date+' '+r.name)+' 비교에 넣기"></td><td><span class="num">'+esc(r.date)+'</span>'+noteHTML(r)+'<div class="small muted">'+esc(r.name)+(r.mass?' · '+r.mass+'kg':'')+(r.ang&&r.ang.length?' · '+r.ang.map(a=>esc(a.n)+' '+a.min+'–'+a.max+'°').join(', '):'')+'</div></td><td class="v">'+f2(s.vPeak)+'</td><td class="v">'+f2(s.meanAsc)+'</td><td class="v">'+f0(s.rom*100)+'cm</td><td style="text-align:right;white-space:nowrap">'+recBtns(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">최고·평균은 상승 속도(m/s)입니다. 같은 동작이라도 촬영 각도와 기준 길이를 찍은 방식이 다르면 수치가 달라집니다.</p>'}
 
 
 function viewRecords(){const all=S.recs.slice().sort((a,b)=>a.created<b.created?1:-1);if(!all.length)return '<div class="card"><h2>저장한 기록이 없습니다</h2><p class="muted">분석 화면에서 결과가 나오면 <b>기록 저장</b>을 누르세요. 영상은 저장하지 않고 궤적 숫자만 저장합니다.</p><div><a class="btn" href="#analyze" style="text-decoration:none;display:inline-block">분석 화면으로</a></div></div>';
   const sp=S.rsp||V.sport,list=all.filter(r=>(r.sport||'free')===sp),cnt=k=>all.filter(r=>(r.sport||'free')===k).length;
   let h='<div class="card"><div class="row"><h2>기록</h2><div class="field" style="max-width:230px;margin-left:auto"><label for="fRecSport">종목</label><select id="fRecSport">'+Object.keys(SPORT).map(k=>'<option value="'+k+'"'+(sp===k?' selected':'')+'>'+SPORT[k].n+' ('+cnt(k)+')</option>').join('')+'</select></div></div>';
   if(!list.length)return h+'<p class="muted">이 종목으로 저장한 기록이 없습니다.</p></div>';
+  h+=editFormHTML(list);
   return h+(sp==='pullup'?pullRecHTML(list):sp==='cmj'?cmjRecHTML(list):sp==='start'?startRecHTML(list):sp==='dolphin'?dolphinRecHTML(list):freeRecHTML(list))+'</div>'}
 function startRecHTML(list){const ok=list.filter(r=>r.st&&r.st.entD!=null).sort((a,b)=>a.created-b.created),g=v=>v==null?'–':f2(v);let h='<h3>입수 거리 추이</h3>';
   h+=ok.length?lineSVG(ok.map(r=>({label:r.date.slice(5).replace('-','.'),v:r.st.entD})),'m'):'<p class="muted">입수가 인식된 기록이 없습니다.</p>';
   return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">블록</th><th class="v">비행</th><th class="v">입수 거리</th><th class="v">이탈 속도</th><th class="v">이탈 각</th><th class="v">브레이크아웃</th><th></th></tr>'+
-    list.map(r=>{const c=r.st||{};return '<tr><td class="num">'+esc(r.date)+'</td><td class="v">'+g(c.blk)+'</td><td class="v">'+g(c.flight)+(c.depSrc==='vel'?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+(c.entD==null?'–':f2(c.entD)+'m')+'</td><td class="v">'+g(c.vTo)+'</td><td class="v">'+(c.angTo==null?'–':f0(c.angTo)+'°')+'</td><td class="v">'+(c.boD==null?'–':f1(c.boD)+'m · '+f2(c.boT)+'초')+'</td><td style="text-align:right;white-space:nowrap">'+delBtn(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">시간 단위는 초, 속도는 m/s입니다. 브레이크아웃 시간은 출발 신호를 지정한 기록은 신호 기준, 아니면 이탈 기준입니다.</p>'}
+    list.map(r=>{const c=r.st||{};return '<tr><td class="num">'+esc(r.date)+noteHTML(r)+'</td><td class="v">'+g(c.blk)+'</td><td class="v">'+g(c.flight)+(c.depSrc==='vel'?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+(c.entD==null?'–':f2(c.entD)+'m')+'</td><td class="v">'+g(c.vTo)+'</td><td class="v">'+(c.angTo==null?'–':f0(c.angTo)+'°')+'</td><td class="v">'+(c.boD==null?'–':f1(c.boD)+'m · '+f2(c.boT)+'초')+'</td><td style="text-align:right;white-space:nowrap">'+recBtns(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">시간 단위는 초, 속도는 m/s입니다. 브레이크아웃 시간은 출발 신호를 지정한 기록은 신호 기준, 아니면 이탈 기준입니다.</p>'}
 function dolphinRecHTML(list){const ok=list.filter(r=>r.dk&&r.dk.f!=null).sort((a,b)=>a.created-b.created),g=v=>v==null?'–':f2(v);let h='<h3>킥 템포 추이</h3>';
   h+=ok.length?lineSVG(ok.map(r=>({label:r.date.slice(5).replace('-','.'),v:r.dk.f})),'회/초'):'<p class="muted">킥이 인식된 기록이 없습니다.</p>';
   return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">횟수</th><th class="v">템포</th><th class="v">진폭</th><th class="v">전진 속도</th><th class="v">킥당 전진</th><th></th></tr>'+
-    list.map(r=>{const c=r.dk||{};return '<tr><td class="num">'+esc(r.date)+'</td><td class="v">'+(c.n==null?'–':c.n)+'</td><td class="v">'+g(c.f)+'</td><td class="v">'+(c.amp==null?'–':f0(c.amp*100)+'cm')+(c.rel===false?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+g(c.v)+'</td><td class="v">'+(c.dpk==null?'–':f2(c.dpk)+'m')+'</td><td style="text-align:right;white-space:nowrap">'+delBtn(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">템포는 초당 킥 수, 속도는 m/s입니다.</p>'}
+    list.map(r=>{const c=r.dk||{};return '<tr><td class="num">'+esc(r.date)+noteHTML(r)+'</td><td class="v">'+(c.n==null?'–':c.n)+'</td><td class="v">'+g(c.f)+'</td><td class="v">'+(c.amp==null?'–':f0(c.amp*100)+'cm')+(c.rel===false?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+g(c.v)+'</td><td class="v">'+(c.dpk==null?'–':f2(c.dpk)+'m')+'</td><td style="text-align:right;white-space:nowrap">'+recBtns(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">템포는 초당 킥 수, 속도는 m/s입니다.</p>'}
 
 /* ===== 방법 화면 ===== */
 function viewGuide(){return '<div class="card"><h2>먼저 알아둘 것</h2><div class="prose"><ul>'+
@@ -934,13 +965,21 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
   else if(t.id==='undoBtn'){undoV(false)}
   else if(t.id==='redoBtn'){undoV(true)}
   else if(t.id==='stopBtn'){V.abort=true}
-  else if(t.id==='saveBtn'){const r=V.res;if(!r||!V.has)return;const r3=a=>a.map(v=>Math.round(v*1000)/1000),s=Object.assign({},r.sum);
-    const rec={id:'mv_'+Date.now().toString(36),date:today(),name:(V.sport==='free'?(V.name||'이름 없는 동작'):SPORT[V.sport].n).slice(0,30),sport:V.sport,body:parseFloat(V.body)||0,mass:parseFloat(V.mass)||0,fs:r.fs,slow:V.slow,win:winOf(),X:r3(resample(r.t,r.X,Math.min(r.fs,60))),Y:r3(resample(r.t,r.Y,Math.min(r.fs,60))),sum:s,ang:r.angles.map(a=>({n:a.n,min:Math.round(a.min),max:Math.round(a.max)})),created:Date.now(),v:3};rec.fs=Math.min(r.fs,60);
+  else if(t.id==='saveBtn'||t.id==='saveNewBtn'){const r=V.res;if(!r||!V.has)return;const old=t.id==='saveBtn'&&S.editRec?S.recs.find(x=>x.id===S.editRec):null;const r3=a=>a.map(v=>Math.round(v*1000)/1000),s=Object.assign({},r.sum);
+    const rec={id:'mv_'+Date.now().toString(36),date:today(),name:(V.sport==='free'?(V.name||'이름 없는 동작'):SPORT[V.sport].n).slice(0,30),sport:V.sport,body:parseFloat(V.body)||0,mass:parseFloat(V.mass)||0,fs:r.fs,slow:V.slow,win:winOf(),X:r3(resample(r.t,r.X,Math.min(r.fs,60))),Y:r3(resample(r.t,r.Y,Math.min(r.fs,60))),sum:s,ang:r.angles.map(a=>({n:a.n,min:Math.round(a.min),max:Math.round(a.max)})),created:Date.now(),v:3};rec.fs=Math.min(r.fs,60);rec.setup=setupOf();if(old){rec.id=old.id;rec.created=old.created;rec.date=old.date;if(old.note)rec.note=old.note}
     const R=V.rep,rd=v=>v==null?null:Math.round(v*1000)/1000;if(V.sport==='pullup'&&R&&R.sum)rec.pu=Object.assign({},R.sum,{reps:R.reps.map(q=>({rom:rd(q.rom),T:rd(q.T),mean:rd(q.mean),peak:rd(q.peak)}))});
     if(V.sport==='start'&&R)rec.st={entD:rd(R.entD),flight:rd(R.flight),blk:rd(R.blk),vTo:rd(R.vTo),angTo:R.angTo==null?null:Math.round(R.angTo*10)/10,bodyEnt:R.bodyEnt==null?null:Math.round(R.bodyEnt),angEnt:R.angEnt==null?null:Math.round(R.angEnt),peakH:rd(R.peakH),tEnt:rd(R.tEnt),t5s:rd(R.t5s),boD:R.bo?rd(R.bo.d):null,boT:R.bo?rd(R.bo.t-(R.sig!=null?R.sig:R.dep!=null?R.dep:0)):null,boRef:R.sig!=null?'sig':'dep',uw:R.bo?rd(R.bo.uw):null,depSrc:R.depSrc};
     if(V.sport==='dolphin'&&R&&R.n>=2)rec.dk={n:R.n,f:rd(R.f),amp:rd(R.amp),v:rd(R.v),dpk:rd(R.dpk),ratio:rd(R.ratio),vDown:rd(R.vDown),knee:R.knee==null?null:Math.round(R.knee),rel:R.rel};
     if(V.sport==='cmj'&&R)rec.cmj={h:rd(R.h),hSrc:R.hSrc,T:rd(R.T),depth:rd(R.depth),vTo:rd(R.vTo),ttt:rd(R.ttt),rsi:rd(R.rsi),pp:R.pp==null?null:Math.round(R.pp),sayers:R.sayers==null?null:Math.round(R.sayers),knee:R.knee==null?null:Math.round(R.knee),hDisp:rd(R.hDisp)};
-    t.disabled=true;const res=await Store.save(rec);if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}toast(res==='cloud'?'계정에 저장했습니다.':'이 브라우저에 저장했습니다.');S.sel=null;location.hash='#records'}
+    t.disabled=true;const res=await Store.save(rec);if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}toast((old?'기록을 고쳤습니다. ':'')+(res==='cloud'?'계정에 저장했습니다.':'이 브라우저에 저장했습니다.'));S.sel=null;S.editRec=null;S.rsp=rec.sport;location.hash='#records'}
+  else if(t.dataset.edit){S.edit=S.edit===t.dataset.edit?null:t.dataset.edit;S.delAsk=null;render();const eb=document.querySelector('.editbox');if(eb)eb.scrollIntoView({block:'nearest'})}
+  else if(t.id==='eNo'){S.edit=null;render()}
+  else if(t.id==='eSave'){const r0=S.recs.find(x=>x.id===S.edit);if(!r0)return;const rec=cpo(r0),v=id=>{const el=document.getElementById(id);return el?el.value:null};
+    rec.date=v('eDate')||rec.date;const nt=(v('eNote')||'').trim().slice(0,80);if(nt)rec.note=nt;else delete rec.note;if(rec.sport==='free'&&v('eName')!=null)rec.name=(v('eName').trim()||'이름 없는 동작').slice(0,30);
+    let lost=false;if(!(SPORT[rec.sport]&&SPORT[rec.sport].swim)){const b=v('eBody')!=null?(parseFloat(v('eBody'))||0):rec.body||0,m=parseFloat(v('eMass'))||0;if(b!==(rec.body||0)||m!==(rec.mass||0))lost=remass(rec,b,m)}
+    t.disabled=true;const res=await Store.save(rec);if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}S.edit=null;render();toast('기록을 고쳤습니다.'+(lost?' 무게가 없던 기록이라 파워는 영상으로 다시 분석해야 나옵니다.':''))}
+  else if(t.id==='eVideo'){const r0=S.recs.find(x=>x.id===S.edit);if(!r0)return;S.edit=null;S.editRec=r0.id;stopPlay();V.sport=r0.sport||'free';setDemo();V.pending=r0;location.hash='#analyze';if(S.view==='analyze')render();window.scrollTo(0,0)}
+  else if(t.id==='editCancel'){S.editRec=null;V.pending=null;render()}
   else if(t.dataset.del){S.delAsk=t.dataset.del;render()}
   else if(t.dataset.delno){S.delAsk=null;render()}
   else if(t.dataset.del2){S.delAsk=null;await Store.remove(t.dataset.del2);render();toast('기록을 삭제했습니다.')}
