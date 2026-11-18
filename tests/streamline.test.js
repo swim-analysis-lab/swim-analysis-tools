@@ -1,6 +1,6 @@
 const fs=require('fs');const html=fs.readFileSync(require('path').join(__dirname,'../streamline/index.html'),'utf8');
 const core=html.match(/<script id="core">([\s\S]*?)<\/script>/)[1];
-const ctx={};new Function('ctx',core+';Object.assign(ctx,{computeMetrics,rate,rateAll,verdict,normSkeleton,recommend,EX,METRICS,PTS,MODES,ptsFor});')(ctx);
+const ctx={};new Function('ctx',core+';Object.assign(ctx,{computeMetrics,rate,rateAll,verdict,normSkeleton,recommend,EX,METRICS,PTS,MODES,ptsFor,autoPoints});')(ctx);
 const {computeMetrics,rateAll,recommend,verdict,EX}=ctx;
 let fail=0;const near=(n,a,b,t=0.6)=>{const ok=Math.abs(a-b)<=t;if(!ok)fail++;console.log((ok?'ok  ':'FAIL')+' '+n+': '+a.toFixed(2)+' vs '+b)};
 // 좌표: W=H=1000, 배가 오른쪽. 완전 일자(수직)
@@ -74,4 +74,19 @@ const sk=normSkeleton(a20u,1000,1000,'right',true);near('upper skel hip origin',
 chk('ptsFor upper order',ptsFor('upper')[0].k==='wrist'&&ptsFor('upper').find(p=>p.k==='finger').opt===true);
 chk('ptsFor full has 12',ptsFor('full').length===12&&ptsFor().length===12);
 console.log('upper-mode checks',uf?'FAIL':'ok');}
+
+// ===== 자동 마킹 변환 =====
+{const {autoPoints}=ctx;const L=Array.from({length:33},()=>({x:.5,y:.5,z:0,visibility:1}));
+ const set=(i,x,y,z)=>L[i]={x,y,z,visibility:.9};
+ // 왼쪽 몸(가까움 z<0)이 배를 오른쪽으로 두고 섬. 오른쪽 몸은 z>0
+ [[15,.5,.12],[13,.5,.24],[11,.5,.36],[7,.49,.30],[23,.5,.6],[25,.5,.78],[27,.5,.94]].forEach(([i,x,y])=>set(i,x,y,-.2));
+ [[16,.52,.12],[14,.52,.24],[12,.52,.36],[8,.51,.30],[24,.52,.6],[26,.52,.78],[28,.52,.94]].forEach(([i,x,y])=>set(i,x,y,.2));
+ set(0,.53,.31,0);
+ const W=200,H=200,data=new Float32Array(W*H);for(let y=60;y<130;y++)for(let x=88;x<114;x++)data[y*W+x]=1; // 몸통 직사각형
+ const a=autoPoints(L,{w:W,h:H,data},1000,1000,'upper');
+ const ck=(n,c)=>{if(!c)fail++;console.log((c?'ok  ':'FAIL')+' '+n)};
+ ck('auto side L',a.side==='L');ck('auto front right',a.front==='right');
+ near('auto wrist y',a.pts.wrist[1],.12,1e-6);ck('auto thigh mid',Math.abs(a.pts.thigh[1]-.69)<1e-6);
+ ck('auto no knee in upper',!a.pts.knee);ck('auto contour',a.contour&&a.pts.back[0]<.5&&a.pts.rib[0]>.5);
+ const f=autoPoints(L,null,1000,1000,'full');ck('auto full knee/ankle',!!f.pts.knee&&!!f.pts.ankle&&!f.pts.back);}
 console.log(fail?('\n'+fail+' FAILED'):'\nALL PASS');process.exit(fail?1:0);
