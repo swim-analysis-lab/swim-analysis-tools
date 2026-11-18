@@ -446,7 +446,7 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
 const f2=v=>v==null?'–':v.toFixed(2),f1=v=>v==null?'–':v.toFixed(1),f0=v=>v==null?'–':String(Math.round(v));
 const vid=document.getElementById('vid'),wk=document.createElement('canvas');let wctx=null;
-const V={tmode:'tmpl',has:false,dur:0,cw:405,ch:720,cur:0,t0:0,t1:0,slow:1,rate:60,name:'',mass:'',cal:{a:null,b:null,cm:45},target:null,half:16,track:null,res:null,mode:null,busy:false,abort:false,playing:false,chart:'vy',tmp:null,prog:'',preset:'pu1',extra:{},tIdx:0,fixK:'main',sport:'pullup',body:'',bar:null,man:{},rep:null};
+const V={ai:null,aiBusy:false,aiMsg:'',aiOpen:false,tmode:'tmpl',has:false,dur:0,cw:405,ch:720,cur:0,t0:0,t1:0,slow:1,rate:60,name:'',mass:'',cal:{a:null,b:null,cm:45},target:null,half:16,track:null,res:null,mode:null,busy:false,abort:false,playing:false,chart:'vy',tmp:null,prog:'',preset:'pu1',extra:{},tIdx:0,fixK:'main',sport:'pullup',body:'',bar:null,man:{},rep:null};
 /* 추적 구성: 주 추적점 하나는 항상 있고, 각도용 점을 더할 수 있음 */
 const SPORT={pullup:{pmain:[0,7,8],tmode:'tmpl',n:'중량 풀업',main:'머리 추적점',presets:['pu1','pu2'],cm:45,rate:60,massL:'추가 중량(kg)',
    cal:'벨트에 단 원판의 <b>세로 지름</b>(위 끝–아래 끝)을 찍습니다. 범퍼·20kg 원판은 보통 45cm입니다. 사선에서 찍어도 세로 지름은 거의 그대로입니다.',
@@ -569,7 +569,7 @@ async function loadFile(file){stopPlay();V.vname=file.name||'';if(vid.src&&vid.s
   try{await once(vid,'loadedmetadata')}catch(e){toast('이 영상은 브라우저에서 열 수 없습니다. MP4(H.264)로 다시 시도해 주세요.');return}
   const vw=vid.videoWidth,vh=vid.videoHeight,sc=Math.min(1,720/Math.max(vw,vh));if(!vw||!isFinite(vid.duration)){toast('영상 정보를 읽지 못했습니다.');return}
   V.cw=Math.round(vw*sc);V.ch=Math.round(vh*sc);wk.width=V.cw;wk.height=V.ch;wctx=wk.getContext('2d',{willReadFrequently:true});
-  resetUndo();V.has=true;V.dur=vid.duration;V.t0=0;V.t1=Math.min(V.dur,30);V.cur=0;V.track=null;V.res=null;V.rep=null;V.target=null;V.extra={};V.bar=null;V.man={};V.cal={a:null,b:null,cm:V.cal.cm||SPORT[V.sport].cm};V.mode=null;
+  resetUndo();V.ai=null;V.aiMsg='';V.has=true;V.dur=vid.duration;V.t0=0;V.t1=Math.min(V.dur,30);V.cur=0;V.track=null;V.res=null;V.rep=null;V.target=null;V.extra={};V.bar=null;V.man={};V.cal={a:null,b:null,cm:V.cal.cm||SPORT[V.sport].cm};V.mode=null;
   try{await vid.play();vid.pause()}catch(e){}
   try{if(vid.readyState<2)await once(vid,'loadeddata',6000)}catch(e){}
   await seekTo(0);grab();
@@ -592,6 +592,44 @@ function poseLoader(){if(poseP)return poseP;poseP=(async()=>{const M=await impor
   try{return await mk('GPU')}catch(e){return await mk('CPU')}})();poseP.catch(()=>{poseP=null});return poseP}
 const poseIdx=k=>k==='main'?SPORT[V.sport].pmain:PMAP[k]||null;
 function poseDetect(pl,dt){poseTs+=Math.max(1,Math.round(dt*1000));try{const r=pl.detectForVideo(wk,poseTs);return r&&r.landmarks&&r.landmarks[0]?r.landmarks[0].map(q=>({x:q.x*V.cw,y:q.y*V.ch,v:q.visibility==null?1:q.visibility})):null}catch(e){return null}}
+
+/* ----- BAZE API로 관절 위치 확인: 현재 프레임 한 장을 AI 모델에 보내 점 위치를 받아 추적 결과와 비교, 원하면 그 위치로 고침 -----
+   키는 이 브라우저(localStorage 'mv_baze')에만 저장. OpenAI 호환 /chat/completions, 모델 목록은 /models/ */
+const BAZE={base:'https://api.baze.co/v1/gateway',get(){return LS.get('mv_baze',{key:'',model:'',models:[]})},set(o){LS.set('mv_baze',Object.assign(this.get(),o))}};
+const PEN={main:null,hip:'hip (greater trochanter, side of the pelvis)',knee:'knee joint center (side view)',ankle:'ankle (lateral malleolus, outer ankle bone)',toe:'toe tip of the foot (front end of the shoe or foot)',heel:'heel',shoulder:'shoulder joint (acromion)',elbow:'elbow (lateral epicondyle)',wrist:'wrist (ulnar styloid)',a1:null,a2:null,a3:null};
+const MAINEN={pullup:'chin tip (or center of the back of the head if seen from behind)',cmj:'hip (greater trochanter, side of the pelvis)',start:'center of the swim cap / head',dolphin:'ankle (lateral malleolus, outer ankle bone)',free:null};
+function bazeErr(e){if(e&&e.status===401)return 'API 키가 맞지 않습니다(401). 키를 다시 확인해 주세요.';if(e&&e.status===429)return '사용량 한도를 넘었습니다(429). 잠시 뒤 다시 시도하세요.';if(e&&e.status)return 'BAZE 응답 오류('+e.status+'). '+(e.msg||'');
+  return 'BAZE에 연결하지 못했습니다. 인터넷 연결을 확인하고, claude.ai 화면이라면 공유 주소(swim-analysis-lab.github.io)에서 열어 주세요. 공유 주소에서도 안 되면 BAZE가 브라우저 직접 호출을 막고 있는 것입니다.'}
+async function bazeFetch(path,body){const c=BAZE.get();if(!c.key)throw {msg:'nokey'};let r;
+  try{r=await fetch(BAZE.base+path,{method:body?'POST':'GET',headers:Object.assign({'Authorization':'Bearer '+c.key},body?{'Content-Type':'application/json'}:{}),body:body?JSON.stringify(body):undefined})}catch(e){throw {net:true}}
+  const tx=await r.text();if(!r.ok)throw {status:r.status,msg:tx.slice(0,160)};try{return JSON.parse(tx)}catch(e){throw {status:r.status,msg:'응답을 읽지 못했습니다'}}}
+async function bazeModels(){const j=await bazeFetch('/models/');const a=(j.data||j.models||j||[]).map(m=>typeof m==='string'?m:(m.id||m.name)).filter(Boolean);return a}
+/* 응답 글에서 JSON만 꺼내기(코드 블록 등 섞여 있어도) */
+function parseAIPoints(txt,keys){if(typeof txt!=='string')return null;const m=txt.match(/\{[\s\S]*\}/);if(!m)return null;let j;try{j=JSON.parse(m[0])}catch(e){return null}const P=j.points||j;const out={};
+  keys.forEach(k=>{const v=P[k];let x=null,y=null;if(Array.isArray(v)&&v.length>=2){x=+v[0];y=+v[1]}else if(v&&typeof v==='object'){x=+v.x;y=+v.y}if(isFinite(x)&&isFinite(y)&&x>=0&&y>=0&&x<=1000&&y<=1000)out[k]={x:x/1000,y:y/1000}});return Object.keys(out).length?out:null}
+async function aiCheck(){if(V.busy||V.aiBusy||!V.has)return;const c=BAZE.get();if(!c.key||!c.model){V.aiOpen=true;V.aiMsg='먼저 BAZE API 키를 넣고 모델을 고르세요.';render();return}
+  const pts=ptList().map(p=>[p[0],p[1],p[0]==='main'?MAINEN[V.sport]:PEN[p[0]]]).filter(p=>p[2]);if(!pts.length){V.aiMsg='이 추적 구성의 점은 AI가 찾을 수 있는 신체 부위가 아닙니다.';render();return}
+  V.aiBusy=true;V.aiMsg='현재 프레임을 '+c.model+' 모델에 보내는 중입니다…';render();const t=V.cur;
+  try{grab();const url=wk.toDataURL('image/jpeg',.88);
+    const prompt='This is one frame ('+V.cw+'x'+V.ch+' px) from a side-view sports video. Locate these body points of the athlete (the person nearest the camera, the side facing the camera):\n'+pts.map(p=>'- "'+p[0]+'": '+p[2]).join('\n')+'\nReturn ONLY JSON: {"points":{"key":[x,y],...}} where x and y are integers 0-1000 normalized to image width and height (0,0 = top-left). Omit a point if it is not visible.';
+    const j=await bazeFetch('/chat/completions',{model:c.model,temperature:0,messages:[{role:'user',content:[{type:'text',text:prompt},{type:'image_url',image_url:{url}}]}]});
+    const txt=j.choices&&j.choices[0]&&j.choices[0].message?j.choices[0].message.content:(j.output_text||'');const P=parseAIPoints(Array.isArray(txt)?txt.map(q=>q.text||'').join(''):txt,pts.map(p=>p[0]));
+    if(!P){V.aiMsg='모델 응답에서 위치를 읽지 못했습니다. 다른 모델을 골라 보세요. (응답 앞부분: '+esc(String(txt).slice(0,80))+')';return}
+    const o={};Object.keys(P).forEach(k=>o[k]={x:P[k].x*V.cw,y:P[k].y*V.ch});V.ai={t,model:c.model,pts:o};V.aiMsg='';
+  }catch(e){V.aiMsg=e&&e.msg==='nokey'?'API 키를 먼저 넣어 주세요.':bazeErr(e)}
+  finally{V.aiBusy=false;if(S.view==='analyze')render()}}
+function aiHTML(){const c=BAZE.get(),has=!!c.key,ppm=pxPerM();let h='<h3>AI로 위치 확인 (BAZE)</h3>';
+  h+='<p class="small muted">점이 관절에서 벗어난 것 같은 프레임으로 옮긴 뒤 누르면, 그 프레임 한 장을 AI 모델에 보내 관절 위치를 받아 지금 추적 위치와 비교합니다. 맞다고 보이면 그 위치로 고쳐 그 프레임부터 다시 추적합니다. 프레임마다 쓰는 것이 아니라 확인용입니다(AI 좌표는 화면의 1~3% 정도 어긋날 수 있음).</p>';
+  h+='<div class="row"><button class="btn" type="button" id="aiBtn"'+(V.aiBusy||V.busy?' disabled':'')+'>'+(V.aiBusy?'확인 중…':'이 프레임 AI로 확인')+'</button><button class="btn sm" type="button" id="aiSet">'+(V.aiOpen?'설정 닫기':'BAZE 설정')+(has&&c.model?' · '+esc(c.model):has?'':' (키 필요)')+'</button></div>';
+  if(V.aiOpen)h+='<div class="editbox"><div class="row"><div class="field" style="flex:2"><label for="bzKey">BAZE API 키</label><input id="bzKey" type="password" autocomplete="off" placeholder="'+(has?'저장됨 — 바꾸려면 새 키 입력':'키를 붙여 넣으세요')+'"></div></div>'+
+    '<div class="row"><button class="btn sm" type="button" id="bzSave">키 저장 · 모델 목록 받기</button>'+(has?'<button class="btn sm" type="button" id="bzDel">키 지우기</button>':'')+'</div>'+
+    (c.models&&c.models.length?'<div class="row"><div class="field" style="flex:2"><label for="bzModel">모델 (사진을 읽을 수 있는 모델: gemini·gpt·claude 계열)</label><select id="bzModel">'+c.models.map(m=>'<option value="'+esc(m)+'"'+(m===c.model?' selected':'')+'>'+esc(m)+'</option>').join('')+'</select></div></div>':'')+
+    '<p class="small muted">키는 이 브라우저에만 저장되고, AI 확인을 누를 때 그 프레임 사진 한 장과 함께 BAZE로만 보냅니다. 공용 컴퓨터에서는 다 쓴 뒤 키 지우기를 누르세요.</p></div>';
+  if(V.aiMsg)h+='<div class="banner'+(/못|오류|않|넘었/.test(V.aiMsg)?' warn':'')+'">'+V.aiMsg+'</div>';
+  const A=V.ai;if(A){const here=Math.abs(A.t-V.cur)<1e-3;h+='<p class="small">'+f2(A.t)+'초 프레임 · '+esc(A.model)+(here?'':' <span class="muted">(그 프레임으로 가면 영상 위에 분홍 표시가 보입니다)</span>')+' <button class="btn sm" type="button" id="aiGo">그 프레임으로</button></p>';
+    h+='<div class="tscroll"><table class="mt"><tr><th>점</th><th class="v">추적과 차이</th><th></th></tr>'+Object.keys(A.pts).map(k=>{const q=trackAt(A.t,k),d=q?Math.hypot(q.x-A.pts[k].x,q.y-A.pts[k].y):null;
+      return '<tr><td><b>'+esc(ptName(k))+'</b></td><td class="v">'+(d==null?'추적 없음':f0(d)+'px'+(ppm?' ('+f1(d/ppm*100)+'cm)':''))+'</td><td style="text-align:right"><button class="btn sm" type="button" data-aifix="'+k+'"'+(V.busy||!V.track?' disabled':'')+'>AI 위치로 고치기</button></td></tr>'}).join('')+'</table></div>';}
+  return h}
 
 /* ----- 추적 실행 ----- */
 async function runTrack(fix){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.abort=false;V.mode=null;uiState();
@@ -684,6 +722,7 @@ function paint(){const cv=$('#cv');if(!cv)return;const c=cv.getContext('2d');
   else if(V.target&&!(tg&&V.mode==='target'&&V.tIdx===0))box(V.target,'#ffd43b');
   drawExtras(c,lw);
   if(tg)box(tg,'#ffffff');
+  if(V.ai&&V.has&&Math.abs(V.ai.t-V.cur)<1e-3){Object.keys(V.ai.pts).forEach(k=>{const q=V.ai.pts[k];c.strokeStyle='#0b1519';c.lineWidth=lw*1.6;c.beginPath();c.moveTo(q.x-lw*3,q.y-lw*3);c.lineTo(q.x+lw*3,q.y+lw*3);c.moveTo(q.x+lw*3,q.y-lw*3);c.lineTo(q.x-lw*3,q.y+lw*3);c.stroke();c.strokeStyle='#ff6ad5';c.lineWidth=lw*.8;c.stroke();c.font='700 '+Math.round(lw*4.2)+'px sans-serif';c.fillStyle='#ff6ad5';c.fillText('AI '+ptName(k),q.x+lw*3.5,q.y-lw*3)})}
   if(V.sport==='start'&&V.man.bo&&V.has){const b=V.man.bo;c.strokeStyle='#0b1519';c.lineWidth=lw*1.2;c.beginPath();c.arc(b.x,b.y,lw*2.6,0,7);c.stroke();c.strokeStyle='#7cc6ff';c.lineWidth=lw*.7;c.stroke();c.font='700 '+Math.round(lw*4.6)+'px sans-serif';c.fillStyle='#7cc6ff';c.fillText('BO',b.x+lw*3.2,b.y-lw*2.4)}
   const Rs=V.rep,ov=txt=>{c.font='700 '+Math.round(lw*6)+'px sans-serif';const tw=c.measureText(txt).width;c.fillStyle='rgba(11,21,25,.8)';c.fillRect(V.cw-tw-24,10,tw+14,lw*9);c.fillStyle='#7cc6ff';c.fillText(txt,V.cw-tw-17,10+lw*6.6)};
   if(V.sport==='start'&&Rs&&Rs.dep!=null&&Rs.ent!=null&&!V.busy){const t=realT();if(t>=Rs.dep&&t<=Rs.ent)ov('비행 '+Math.round((t-Rs.dep)*1000)+' ms')}
@@ -827,6 +866,7 @@ function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has,R
   if(!demo&&V.sport==='start'){const R=V.rep,f=v=>v==null?'–':f2(v);h+='<h3>시점 지정</h3><p class="small">출발 신호 <b class="num">'+f(R&&R.sig)+'</b> · 이탈 <b class="num">'+f(R&&R.dep)+'</b>'+(R&&R.depSrc?' <span class="pill n">'+{manual:'직접',toe:'발끝 자동',vel:'참고'}[R.depSrc]+'</span>':'')+' · 입수 <b class="num">'+f(R&&R.ent)+'</b>'+(R&&R.entSrc?' <span class="pill n">'+{manual:'직접',auto:'수면선 자동'}[R.entSrc]+'</span>':'')+' · 브레이크아웃 <b class="num">'+f(R&&R.bo&&R.bo.t)+'</b>초</p>'+
     '<div class="row"><button class="btn sm" type="button" id="mkSig">현재 프레임을 출발 신호로</button><button class="btn sm" type="button" id="mkDep">현재 프레임을 출발대 이탈로</button><button class="btn sm" type="button" id="mkEnt">현재 프레임을 입수로</button><button class="btn sm'+(V.mode==='bo'?' on':'')+'" type="button" id="boBtn">브레이크아웃 위치 찍기</button>'+(Object.keys(V.man).length?'<button class="btn sm" type="button" id="manReset">직접 지정 모두 지우기</button>':'')+'</div>'+
     '<p class="small muted">출발 신호는 불빛이 켜진 프레임(없으면 소리가 시작된 프레임)입니다. 휴대폰 영상은 소리가 0.1~0.2초 늦게 녹음될 수 있습니다. 이탈은 앞발이 출발대에서 떨어진 첫 프레임, 입수는 머리가 물에 잠기기 시작한 프레임입니다. 브레이크아웃은 머리가 수면 위로 처음 보이는 프레임으로 옮긴 뒤 머리를 누르세요.</p>'}
+  if(!demo)h+=aiHTML();
   if(!demo)h+='<div class="row">'+(ptList().length>1?'<div class="field" style="max-width:150px"><label for="fixSel">고칠 점</label><select id="fixSel">'+ptList().map(p=>'<option value="'+p[0]+'"'+(V.fixK===p[0]?' selected':'')+'>'+p[1]+'</option>').join('')+'</select></div>':'')+'<button class="btn'+(V.mode==='fix'?' on':'')+'" type="button" id="fixBtn">현재 시점부터 위치 고치기</button><button class="btn primary" type="button" id="saveBtn">'+(S.editRec?'고친 내용 저장':'기록 저장')+'</button>'+(S.editRec?'<button class="btn" type="button" id="saveNewBtn">새 기록으로 저장</button>':'')+'</div>';
   return h+'</div>'}
 function guideText(){if(V.busy)return '추적 중입니다 '+V.prog;if(!V.has)return '예시 궤적입니다. 재생하거나 막대를 움직여 보세요. 내 영상을 선택하면 바뀝니다.';
@@ -1062,6 +1102,15 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
     let lost=false;if(!(SPORT[rec.sport]&&SPORT[rec.sport].swim)){const b=v('eBody')!=null?(parseFloat(v('eBody'))||0):rec.body||0,m=parseFloat(v('eMass'))||0;if(b!==(rec.body||0)||m!==(rec.mass||0))lost=remass(rec,b,m)}
     t.disabled=true;const res=await Store.save(rec);if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}S.edit=null;render();toast('기록을 고쳤습니다.'+(lost?' 무게가 없던 기록이라 파워는 영상으로 다시 분석해야 나옵니다.':''))}
   else if(t.id==='eVideo'){const r0=S.recs.find(x=>x.id===S.edit);if(!r0)return;S.edit=null;S.editRec=r0.id;stopPlay();V.sport=r0.sport||'free';setDemo();V.pending=r0;location.hash='#analyze';if(S.view==='analyze')render();window.scrollTo(0,0)}
+  else if(t.id==='aiSet'){V.aiOpen=!V.aiOpen;render()}
+  else if(t.id==='aiBtn'){stopPlay();aiCheck()}
+  else if(t.id==='aiGo'){if(V.ai){stopPlay();await setCur(V.ai.t);render()}}
+  else if(t.dataset.aifix){const k=t.dataset.aifix,A=V.ai;if(!A||!A.pts[k]||V.busy)return;stopPlay();await setCur(A.t);remember(ptName(k)+' AI 위치로 고침');runTrack({t:A.t,k,x:A.pts[k].x,y:A.pts[k].y})}
+  else if(t.id==='bzDel'){BAZE.set({key:'',models:[],model:''});V.aiMsg='키를 지웠습니다.';render()}
+  else if(t.id==='bzSave'){const el=$('#bzKey'),k=el&&el.value.trim();if(k)BAZE.set({key:k});if(!BAZE.get().key){V.aiMsg='키를 입력해 주세요.';render();return}
+    t.disabled=true;V.aiMsg='모델 목록을 받는 중…';render();
+    try{const ms=await bazeModels();const pref=ms.find(m=>/gemini.*(pro|flash)/i.test(m))||ms.find(m=>/gpt-?[45]/i.test(m))||ms.find(m=>/claude/i.test(m))||ms[0]||'';const cur=BAZE.get().model;BAZE.set({models:ms,model:ms.includes(cur)?cur:pref});V.aiMsg='연결됐습니다. 모델 '+ms.length+'개를 받았습니다. 사진을 읽을 수 있는 모델(gemini·gpt·claude 계열)을 고르세요.'}
+    catch(e){V.aiMsg=bazeErr(e)}render()}
   else if(t.id==='editCancel'){S.editRec=null;V.pending=null;render()}
   else if(t.dataset.del){S.delAsk=t.dataset.del;render()}
   else if(t.dataset.delno){S.delAsk=null;render()}
@@ -1075,6 +1124,7 @@ document.addEventListener('change',async e=>{const t=e.target;
   else if(t.id==='fSlow'){V.slow=+t.value;if(V.has){reanalyze();render()}}
   else if(t.id==='fRate'){remember('분석 간격 변경');V.rate=+t.value;if(V.has){clearTrack();render()}}
   else if(t.id==='fPreset'){remember('추적 구성 변경');V.preset=t.value;V.extra={};V.mode=null;V.fixK='main';if(V.chart==='ang')V.chart='vy';if(V.has){clearTrack();render()}else render()}
+  else if(t.id==='bzModel'){BAZE.set({model:t.value})}
   else if(t.id==='fixSel'){V.fixK=t.value;uiState()}
   else if(t.id==='fTmode'){remember('추적 방식 변경');V.tmode=t.value;if(V.has){clearTrack();render()}}
   else if(t.id==='fHalf'){remember('추적 상자 크기 변경');V.half=+t.value;if(V.has){clearTrack();render()}else paint()}
