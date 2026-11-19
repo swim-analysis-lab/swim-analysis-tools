@@ -530,6 +530,7 @@ async function runAuto(){const d=S.draft,img=$('#stageImg');if(!d||d.ex||!img)re
     let mask=null;try{const m=res.segmentationMasks&&res.segmentationMasks[0];if(m){mask={w:m.width,h:m.height,data:m.getAsFloat32Array().slice()};m.close()}}catch(e){}
     const a=autoPoints(res.landmarks[0],mask,d.W,d.H,d.mode);if(S.draft!==d)return;
     remember('자동 마킹');Object.keys(a.pts).forEach(k=>d.pts[k]=a.pts[k]);d.auto=Object.keys(a.pts);
+    d.autoRaw={pts:JSON.parse(JSON.stringify(a.pts)),front:a.front,side:a.side,vis:a.vis,model:'pose_landmarker_heavy',lib:'tasks-vision@0.10.34',at:Date.now()};
     const fr=d.front&&d.front!==a.front;if(!d.front)d.front=a.front;
     const low=Object.keys(a.vis).filter(k=>a.vis[k]<0.6).map(k=>PNAME[k]);
     S.autoMsg='자동 초안 '+d.auto.length+'점을 찍었습니다. 점 이름을 눌러 확대경으로 위치를 확인하고 끌어서 고치세요. 고친 점은 표시가 ✓로 바뀝니다.'+(low.length?' 특히 <b>'+low.join(', ')+'</b>은(는) 모델 확신도가 낮습니다.':'')+(a.contour?'':' 몸 윤곽을 찾지 못해 등·허리·엉덩이·갈비 점은 비워 두었습니다.')+(d.pts.finger?'':' 손끝은 자동으로 찍지 않습니다.')+(fr?' 고르신 배 방향이 자동 판단과 다릅니다. 확인해 주세요.':'');
@@ -570,10 +571,10 @@ function viewMeasure(){if(!S.draft)S.draft=newDraftFromExample();const d=S.draft
 /* 되돌리기: 사진(초안)마다 따로. 점 찍기·옮기기·지우기, 촬영 범위, 배 방향 */
 const UH={d:null,u:[],r:[]};
 function uh(){if(UH.d!==S.draft){UH.d=S.draft;UH.u=[];UH.r=[]}return UH}
-function snapD(d){return {pts:JSON.parse(JSON.stringify(d.pts)),mode:d.mode,front:d.front,target:d.target,auto:(d.auto||[]).slice()}}
+function snapD(d){return {pts:JSON.parse(JSON.stringify(d.pts)),mode:d.mode,front:d.front,target:d.target,auto:(d.auto||[]).slice(),autoRaw:d.autoRaw||null}}
 function remember(label,sn){const h=uh();h.u.push({s:sn||snapD(S.draft),label});if(h.u.length>60)h.u.shift();h.r=[]}
 function undoD(redo){const d=S.draft;if(!d||S.drag)return;const h=uh(),A=redo?h.r:h.u,B=redo?h.u:h.r;if(!A.length)return;const e=A.pop();B.push({s:snapD(d),label:e.label});
-  const s=e.s,mc=modeOf(d.mode)!==modeOf(s.mode);d.pts=JSON.parse(JSON.stringify(s.pts));d.mode=s.mode;d.front=s.front;d.target=s.target;d.auto=(s.auto||[]).slice();
+  const s=e.s,mc=modeOf(d.mode)!==modeOf(s.mode);d.pts=JSON.parse(JSON.stringify(s.pts));d.mode=s.mode;d.front=s.front;d.target=s.target;d.auto=(s.auto||[]).slice();d.autoRaw=s.autoRaw||null;
   if(mc)render();else{document.querySelectorAll('[data-front]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.front===d.front));updateStage()}
   toast((redo?'다시 실행: ':'되돌림: ')+e.label)}
 function undoUI(){const h=uh(),u=$('#undoBtn'),r=$('#redoBtn'),l=$('#undoLbl');if(!u)return;u.disabled=!h.u.length;r.disabled=!h.r.length;l.textContent=h.u.length?'되돌릴 작업: '+h.u[h.u.length-1].label:'점을 찍거나 옮기면 되돌릴 수 있습니다'}
@@ -656,7 +657,18 @@ function viewHistory(){const list=recs();if(S.trend==='line'&&!list.some(r=>!isU
    '<h3>관절선 겹쳐 보기</h3><p class="small muted">'+(isUp(a)||isUp(b)?'골반을 맞추고 몸통(골반→어깨)을 수직으로 세운 뒤 몸통+팔 길이를 같게 맞춘 것입니다.':'복사뼈를 맞추고 다리를 수직으로 세운 뒤 몸 길이를 같게 맞춘 것입니다.')+' 촬영 거리와 사진 기울기 차이는 사라지고 자세 차이만 남습니다.</p>'+skeletonSVG(a,b)+
    '<div class="tscroll"><table class="mt"><tr><th>지표</th><th style="text-align:right">이전</th><th style="text-align:right">이후</th><th style="text-align:right">변화</th></tr>'+rows+'</table></div></div>'+
   '<div class="card"><h2>기록 '+list.length+'건</h2><div class="recs">'+list.slice().reverse().map(r=>{const m=M(r);return '<div class="rec"><div data-shot="'+r.id+'" data-tiny="1">'+shotHTML(r,S.photos.get(r.id)||r.photo,'',true)+'</div><div><div class="row"><b class="num">'+esc(r.date)+'</b>'+(m.ok?(isUp(r)?'<span class="small muted">상체</span><span class="num">'+f1(m.upLine)+'%</span>'+pillHTML('upLine',m.upLine):'<span class="num">'+f1(m.line)+'%</span>'+pillHTML('line',m.line)):'')+'</div><div class="small muted">'+esc(r.note||'메모 없음')+'</div>'+
-    (r.ex?'':'<div class="row" style="margin-top:6px"><button class="btn sm" type="button" data-edit="'+r.id+'">수정</button><button class="btn sm" type="button" data-plan="'+r.id+'">추천 보기</button>'+(S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button><button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>')+'</div>')+'</div></div>'}).join('')+'</div></div>'}
+    (r.ex?'':'<div class="row" style="margin-top:6px"><button class="btn sm" type="button" data-edit="'+r.id+'">수정</button><button class="btn sm" type="button" data-plan="'+r.id+'">추천 보기</button>'+(S.delAsk===r.id?'<button class="btn sm danger" type="button" data-del2="'+r.id+'">정말 삭제</button><button class="btn sm" type="button" data-delno="1">취소</button>':'<button class="btn sm" type="button" data-del="'+r.id+'">삭제</button>')+'</div>')+'</div></div>'}).join('')+'</div></div>'+
+  (isEx()?'':exportCard())}
+function exportCard(){const n=S.recs.length,na=S.recs.filter(r=>r.autoRaw).length;
+  return '<div class="card"><h2>분석용 내보내기</h2><p class="small">저장한 기록 '+n+'건을 파일 하나(JSON)로 받습니다. 사진, 최종 점 좌표, 자동 마킹이 처음 찍은 좌표(있는 기록 '+na+'건), 지표 값이 들어 있습니다. 자동 마킹 정확도 확인·보정에 씁니다.</p>'+
+   '<div class="row"><label class="small"><input type="checkbox" id="exPhoto" checked> 사진 포함</label><button class="btn" type="button" id="exportBtn">파일로 받기</button></div>'+
+   '<p class="small muted">사진이 들어 있으므로 본인 확인용으로만 쓰고, 다른 사람 기록은 동의를 받은 경우에만 받으세요. claude.ai 화면에서는 내려받기가 막혀 있으니 공유 주소에서 열어 주세요. 자동 마킹 전 좌표는 이 기능을 넣은 뒤 자동 마킹한 기록부터 저장됩니다.</p></div>'}
+async function buildExport(withPhoto){const out={app:'swim-analysis-lab/streamline',format:1,exported:new Date().toISOString(),points:PTS.map(p=>({k:p.k,n:p.n,hint:p.hint})),records:[]};
+  for(const r of recs().filter(x=>!x.ex)){const m=M(r),o={id:r.id,date:r.date,note:r.note||'',mode:modeOf(r.mode),front:r.front,W:r.W,H:r.H,pts:r.pts,autoKept:r.auto||[],autoRaw:r.autoRaw||null,metrics:{}};
+    METRICS.forEach(x=>{if(m[x.k]!=null)o.metrics[x.k]=Math.round(m[x.k]*100)/100});
+    if(withPhoto&&r.hasPhoto!==false){const ph=await Store.photo(r);if(ph)o.photo=ph}
+    out.records.push(o)}
+  return out}
 async function fillShots(){const list=recs();for(const el of document.querySelectorAll('[data-shot]')){const r=list.find(x=>x.id===el.dataset.shot);if(!r||r.ex||el.querySelector('img'))continue;const p=await Store.photo(r);if(p&&el.isConnected&&!el.querySelector('img'))el.innerHTML=shotHTML(r,p,el.dataset.tag||'',!!el.dataset.tiny)}}
 
 /* ===== 운동 추천 화면 ===== */
@@ -712,7 +724,7 @@ function render(){const v=S.view;document.querySelectorAll('nav.tabs a').forEach
 function refresh(){whereUI();if(S.view!=='measure')render()}
 function route(){const h=(location.hash||'').replace('#','');S.view=['measure','history','plan','guide'].includes(h)?h:'measure';S.delAsk=null;render();window.scrollTo(0,0)}
 window.addEventListener('hashchange',route);
-document.addEventListener('click',async e=>{const t=e.target.closest('#autoBtn,[data-pt],[data-mode],[data-front],[data-clear],[data-edit],[data-plan],[data-del],[data-del2],[data-delno],#saveBtn,#saveNewBtn,#editCancel,#undoBtn,#redoBtn');if(!t)return;const d=S.draft;
+document.addEventListener('click',async e=>{const t=e.target.closest('#exportBtn,#autoBtn,[data-pt],[data-mode],[data-front],[data-clear],[data-edit],[data-plan],[data-del],[data-del2],[data-delno],#saveBtn,#saveNewBtn,#editCancel,#undoBtn,#redoBtn');if(!t)return;const d=S.draft;
   if(t.id==='editCancel'){S.draft=null;render();return}
   if(t.id==='undoBtn'||t.id==='redoBtn'){undoD(t.id==='redoBtn');return}
   if(t.dataset.pt){d.target=t.dataset.pt;updateStage()}
@@ -720,14 +732,17 @@ document.addEventListener('click',async e=>{const t=e.target.closest('#autoBtn,[
   else if(t.dataset.front){if(d.front!==t.dataset.front)remember('배 방향 변경');d.front=t.dataset.front;document.querySelectorAll('[data-front]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.front===d.front));updateStage()}
   else if(t.dataset.clear){remember(PNAME[t.dataset.clear]+' 지우기');delete d.pts[t.dataset.clear];if(d.auto)d.auto=d.auto.filter(x=>x!==t.dataset.clear);updateStage()}
   else if(t.id==='autoBtn'){if(!S.autoBusy)runAuto()}
-  else if(t.dataset.edit){const r=S.recs.find(x=>x.id===t.dataset.edit);if(!r)return;let p=await Store.photo(r),np=false;if(!p){p=blankPhoto(r.W,r.H);np=true}S.draft={nophoto:np,id:r.id,auto:(r.auto||[]).slice(),mode:modeOf(r.mode),date:r.date,note:r.note||'',front:r.front,W:r.W,H:r.H,photo:p,pts:JSON.parse(JSON.stringify(r.pts)),target:null,created:r.created};location.hash='#measure';if(S.view==='measure')render()}
+  else if(t.id==='exportBtn'){t.disabled=true;try{const ex=await buildExport(!!($('#exPhoto')&&$('#exPhoto').checked)),blob=new Blob([JSON.stringify(ex)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+      a.href=url;a.download='streamline-export-'+today()+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);toast(ex.records.length+'건을 파일로 내보냈습니다.')}
+    catch(x){toast('내보내지 못했습니다. 공유 주소에서 다시 시도해 주세요.')}t.disabled=false}
+  else if(t.dataset.edit){const r=S.recs.find(x=>x.id===t.dataset.edit);if(!r)return;let p=await Store.photo(r),np=false;if(!p){p=blankPhoto(r.W,r.H);np=true}S.draft={nophoto:np,id:r.id,auto:(r.auto||[]).slice(),autoRaw:r.autoRaw?JSON.parse(JSON.stringify(r.autoRaw)):null,mode:modeOf(r.mode),date:r.date,note:r.note||'',front:r.front,W:r.W,H:r.H,photo:p,pts:JSON.parse(JSON.stringify(r.pts)),target:null,created:r.created};location.hash='#measure';if(S.view==='measure')render()}
   else if(t.dataset.plan){S.planRec=t.dataset.plan;location.hash='#plan'}
   else if(t.dataset.del){S.delAsk=t.dataset.del;render()}
   else if(t.dataset.delno){S.delAsk=null;render()}
   else if(t.dataset.del2){S.delAsk=null;await Store.remove(t.dataset.del2);render();toast('기록을 삭제했습니다.')}
   else if(t.id==='saveBtn'||t.id==='saveNewBtn'){const asNew=t.id==='saveNewBtn';const m=computeMetrics(d.pts,d.W,d.H,d.front,d.mode);if(!m.ok||d.ex)return;t.disabled=true;
     const md=modeOf(d.mode),pts={};MODES[md].pts.forEach(k=>{if(d.pts[k])pts[k]=d.pts[k]});
-    const rec={id:(!asNew&&d.id)||('rec_'+Date.now().toString(36)),mode:md,date:d.date||today(),note:(d.note||'').slice(0,80),front:d.front,W:d.W,H:d.H,pts,hasPhoto:!d.nophoto,created:(!asNew&&d.created)||Date.now(),v:1};const au=(d.auto||[]).filter(k=>pts[k]);if(au.length)rec.auto=au;
+    const rec={id:(!asNew&&d.id)||('rec_'+Date.now().toString(36)),mode:md,date:d.date||today(),note:(d.note||'').slice(0,80),front:d.front,W:d.W,H:d.H,pts,hasPhoto:!d.nophoto,created:(!asNew&&d.created)||Date.now(),v:1};const au=(d.auto||[]).filter(k=>pts[k]);if(au.length)rec.auto=au;if(d.autoRaw)rec.autoRaw=d.autoRaw;
     const res=await Store.save(rec,d.nophoto?null:d.photo);
     if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}
     if(Store.mode!=='cloud'||res==='local'){if(!S.recs.find(x=>x.id===rec.id))S.recs=LS.get('sl_recs',S.recs)}
