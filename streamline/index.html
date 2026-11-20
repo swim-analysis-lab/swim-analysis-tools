@@ -99,8 +99,9 @@ details>*:not(summary){margin-top:10px}
 .measure{display:grid;gap:16px;grid-template-columns:minmax(0,1fr)}
 @media (min-width:900px){.measure{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);align-items:start}}
 .stagebox{padding:0}
-.stage{position:relative;display:inline-block;line-height:0;touch-action:none;user-select:none;-webkit-user-select:none;cursor:crosshair}
-.stage img{display:block;max-width:100%;max-height:70vh}
+.stage{position:relative;display:inline-block;line-height:0;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;cursor:crosshair}
+.stage img{display:block;max-width:100%;max-height:70vh;pointer-events:none;-webkit-user-drag:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.stage canvas{pointer-events:none}
 .stage svg,.shot svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
 .seg{display:inline-flex;background:var(--sunken);border-radius:9px;padding:3px;gap:2px}
 .seg button{border:0;background:none;padding:6px 12px;cursor:pointer;min-height:34px;font-weight:500;font-size:13.5px;border-radius:7px;color:var(--muted)}
@@ -555,7 +556,7 @@ function viewMeasure(){if(!S.draft)S.draft=newDraftFromExample();const d=S.draft
       [['full','전신'],['upper','상체 (손목~허벅지)']].map(f=>'<button type="button" data-mode="'+f[0]+'" aria-pressed="'+(modeOf(d.mode)===f[0])+'">'+f[1]+'</button>').join('')+'</div></div>'+
     (d.ex?'':'<div class="row"><button class="btn" type="button" id="autoBtn"'+(S.autoBusy?' disabled':'')+'>'+(S.autoBusy?'찾는 중…':'자동으로 점 찍기 (초안)')+'</button><span class="small muted">찍힌 점은 꼭 확인해서 고치세요.</span></div>')+
     (S.autoMsg&&!d.ex?'<div class="banner" id="autoMsg">'+S.autoMsg+'</div>':'')+
-    '<div class="stagebox"><div class="stage" id="stage"><img id="stageImg" src="'+d.photo+'" alt="마킹할 측면 사진"><svg id="stageSvg" viewBox="0 0 '+d.W+' '+d.H+'" preserveAspectRatio="none"></svg><canvas id="loupe" width="256" height="256"></canvas></div></div>'+
+    '<div class="stagebox"><div class="stage" id="stage"><img id="stageImg" src="'+d.photo+'" alt="마킹할 측면 사진" draggable="false"><svg id="stageSvg" viewBox="0 0 '+d.W+' '+d.H+'" preserveAspectRatio="none"></svg><canvas id="loupe" width="256" height="256"></canvas></div></div>'+
     '<div id="guideLine" class="banner"></div>'+
     '<div class="chips" id="chips"></div>'+
     '<div class="row"><button class="btn sm" type="button" id="undoBtn" title="Ctrl+Z">되돌리기</button><button class="btn sm" type="button" id="redoBtn" title="Ctrl+Shift+Z">다시 실행</button><span class="small muted" id="undoLbl"></span></div>'+
@@ -851,5 +852,6 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&Sync.open){Sync.ope
 Sync.boot();
 </script>
 
+<script>/* 사진·영상 위 길게 누르기 메뉴와 끌기 막기 */document.addEventListener('contextmenu',e=>{if(e.target.closest('.stage'))e.preventDefault()});document.addEventListener('dragstart',e=>{if(e.target.closest('.stage'))e.preventDefault()});document.addEventListener('selectstart',e=>{if(e.target.closest('.stage'))e.preventDefault()});</script>
 </body>
 </html>
