@@ -755,6 +755,11 @@ async function loadFile(file){stopPlay();V.vname=file.name||'';if(vid.src&&vid.s
   try{await vid.play();vid.pause()}catch(e){}
   try{if(vid.readyState<2)await once(vid,'loadeddata',6000)}catch(e){}
   await seekTo(0);grab();
+  /* 기록 고치기 중 다른 영상(길이가 0.15초 넘게 다름)을 고르면 분석하지 않고 알림. 기록은 그대로, 같은 영상을 다시 고를 때까지 기다림 */
+  if(V.pending&&V.pending.setup&&V.pending.setup.vdur&&Math.abs(V.pending.setup.vdur-V.dur)>.15){const P=V.pending.setup;
+    V.vidMis='고른 영상'+(V.vname?'(<b>'+esc(V.vname)+'</b>, ':'(')+f2(V.dur)+'초)이 저장할 때 영상'+(P.vname?'(<b>'+esc(P.vname)+'</b>, ':'(')+f2(P.vdur)+'초)과 다릅니다. 분석하지 않았습니다. 같은 영상을 다시 골라 주세요.';
+    render();toast('저장할 때와 다른 영상입니다. 분석하지 않았습니다.');return}
+  V.vidMis='';
   if(V.pending){const P=V.pending;V.pending=null;applySetup(P);render();
     /* 추적 결과가 저장된 기록: 다시 추적하지 않고 그대로 불러옴(영상 길이가 크게 다르면 다른 영상으로 보고 다시 추적) */
     const sameVid=!(P.setup&&P.setup.vdur&&Math.abs(P.setup.vdur-V.dur)>.15);
@@ -1266,7 +1271,7 @@ function applySetup(rec){V.sport=rec.sport||V.sport;V.body=rec.body?String(rec.b
   V.cal={a:sc(P.cal&&P.cal.a),b:sc(P.cal&&P.cal.b),cm:P.cal&&P.cal.cm||SPORT[V.sport].cm};V.bar=sc(P.bar);V.target=sc(P.target);V.extra={};Object.keys(P.extra||{}).forEach(k=>V.extra[k]=sc(P.extra[k]));
   V.man=cpo(P.man)||{};if(V.man.bo){V.man.bo.x*=kx;V.man.bo.y*=ky}if(V.man.pose&&V.man.pose.P)Object.keys(V.man.pose.P).forEach(k=>V.man.pose.P[k]=sc(V.man.pose.P[k]));V.track=null;V.res=null;V.rep=null;
   if(P.vdur&&Math.abs(P.vdur-V.dur)>.15)toast('영상 길이가 저장할 때와 다릅니다('+f2(P.vdur)+'초 → '+f2(V.dur)+'초). 같은 영상인지 확인해 주세요.')}
-function editBanner(){const r=S.editRec&&S.recs.find(x=>x.id===S.editRec);if(!r)return '';const P=r.setup,vn=P&&P.vname?'(<b>'+esc(P.vname)+'</b>)':'';let m;
+function editBanner(){const r=S.editRec&&S.recs.find(x=>x.id===S.editRec);if(!r)return '';const P=r.setup,vn=P&&P.vname?'(<b>'+esc(P.vname)+'</b>)':'';let m;if(V.vidMis)return '<div class="banner warn"><b>'+esc(r.date)+' '+esc(r.name)+'</b> 기록을 고치는 중입니다. '+V.vidMis+' <button class="btn sm" type="button" id="editCancel">고치기 취소</button></div>';if(V.vidMis)return '<div class="banner warn"><b>'+esc(r.date)+' '+esc(r.name)+'</b> 기록을 고치는 중입니다. '+V.vidMis+' <button class="btn sm" type="button" id="editCancel">고치기 취소</button></div>';
   if(V.has&&!V.pending)m=(V.restoreMsg?esc(V.restoreMsg)+' ':'')+'결과를 확인한 뒤 아래 <b>고친 내용 저장</b>을 누르면 기존 기록이 바뀝니다.';
   else if(!P)m='이 기록은 설정이 저장되기 전 기록이라, 같은 영상을 고른 뒤 처음부터 다시 설정해야 합니다.';
   else if(r.trk)m='같은 영상'+vn+'을 선택하면 저장해 둔 추적 결과를 <b>그대로</b> 불러옵니다(다시 추적하지 않음). 영상은 저장되지 않아 다시 골라야 합니다.';
@@ -1537,7 +1542,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
     rec.date=v('eDate')||rec.date;const nt=(v('eNote')||'').trim().slice(0,80);if(nt)rec.note=nt;else delete rec.note;if(rec.sport==='free'&&v('eName')!=null)rec.name=(v('eName').trim()||'이름 없는 동작').slice(0,30);
     let lost=false;if(!(SPORT[rec.sport]&&SPORT[rec.sport].swim)){const b=v('eBody')!=null?(parseFloat(v('eBody'))||0):rec.body||0,m=parseFloat(v('eMass'))||0;if(b!==(rec.body||0)||m!==(rec.mass||0))lost=remass(rec,b,m)}
     t.disabled=true;const res=await Store.save(rec);if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}S.edit=null;render();toast('기록을 고쳤습니다.'+(lost?' 무게가 없던 기록이라 파워는 영상으로 다시 분석해야 나옵니다.':''))}
-  else if(t.id==='eVideo'){const r0=S.recs.find(x=>x.id===S.edit);if(!r0)return;S.edit=null;S.editRec=r0.id;stopPlay();V.sport=r0.sport||'free';setDemo();V.pending=r0;location.hash='#analyze';if(S.view==='analyze')render();window.scrollTo(0,0)}
+  else if(t.id==='eVideo'){const r0=S.recs.find(x=>x.id===S.edit);if(!r0)return;S.edit=null;S.editRec=r0.id;V.vidMis='';stopPlay();V.sport=r0.sport||'free';setDemo();V.pending=r0;location.hash='#analyze';if(S.view==='analyze')render();window.scrollTo(0,0)}
   else if(t.id==='aiSet'){V.aiOpen=!V.aiOpen;render()}
   else if(t.id==='aiBtn'){stopPlay();aiCheck()}
   else if(t.id==='aiGo'){if(V.ai){stopPlay();await setCur(V.ai.t);render()}}
@@ -1547,7 +1552,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
     t.disabled=true;V.aiMsg='모델 목록을 받는 중…';render();
     try{const ms=await bazeModels();const pref=ms.find(m=>/gemini.*(pro|flash)/i.test(m))||ms.find(m=>/gpt-?[45]/i.test(m))||ms.find(m=>/claude/i.test(m))||ms[0]||'';const cur=BAZE.get().model;BAZE.set({models:ms,model:ms.includes(cur)?cur:pref});V.aiMsg='연결됐습니다. 모델 '+ms.length+'개를 받았습니다. 사진을 읽을 수 있는 모델(gemini·gpt·claude 계열)을 고르세요.'}
     catch(e){V.aiMsg=bazeErr(e)}render()}
-  else if(t.id==='editCancel'){S.editRec=null;V.pending=null;render()}
+  else if(t.id==='editCancel'){S.editRec=null;V.pending=null;V.vidMis='';render()}
   else if(t.dataset.del){S.delAsk=t.dataset.del;render()}
   else if(t.dataset.delno){S.delAsk=null;render()}
   else if(t.dataset.del2){S.delAsk=null;await Store.remove(t.dataset.del2);render();toast('기록을 삭제했습니다.')}
