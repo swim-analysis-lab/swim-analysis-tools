@@ -451,24 +451,80 @@ function dolphinReport(r,o){o=o||{};const n=r.t.length;if(n<10)return null;const
   const ratio=full.length?med(full.map(k=>k.down/k.T)):null;
   return {kicks,n:kicks.length,nFull:full.length,per,f,amp,vDown,vUp,v,dpk,ratio,dir,rel:!!hip,h,
     vSrc:hip?'hip':'ankle',knee:knee?med(kicks.filter(k=>k.knee!=null).map(k=>k.knee)):null,hipR:hipA?med(kicks.filter(k=>k.hipR!=null).map(k=>k.hipR)):null}}
+/* 스트림라인(벽 푸시 뒤 글라이드): 주 추적점 = 골반. 수평 속도가 줄어드는 구간에 2차 항력 모형 dv/dt = −k·v²을 맞춤.
+   적분하면 1/v = 1/v0 + k·t (직선). k(1/m)가 작을수록 덜 감속하고, 속도가 절반이 되는 거리는 ln2/k.
+   구간: 직접 지정(o.tA·o.tB, 분석 시간)이 없으면 가장 빠른 시점부터 다시 빨라지기 직전(킥·팔 시작)까지. 처음·끝 o.edge초는 평활이 불안정해 뺌 */
+function glideReport(r,o){o=o||{};const n=r.t.length;if(n<10)return null;const fs=r.fs,e=Math.max(2,Math.round((o.edge!=null?o.edge:.04)*fs));
+  let dir=o.dir||0;if(!dir)dir=r.X[n-1]-r.X[0]>=0?1:-1;const v=r.vx.map(x=>dir*x),at=t=>Math.max(0,Math.min(n-1,Math.round(t*fs)));
+  let i0,i1,src='auto';
+  if(o.tA!=null||o.tB!=null){src='manual';i0=o.tA!=null?at(o.tA):e;i1=o.tB!=null?at(o.tB):n-1-e}
+  else{const a=e,b=n-1-e;if(b-a<4)return null;i0=a;for(let i=a;i<=b;i++)if(v[i]>v[i0])i0=i;
+    /* 가장 느린 점보다 max(0.05 m/s, 4%) 넘게 빨라진 상태가 0.12초 이어지면(킥·팔 시작) 그 앞 가장 느린 점에서 끝. 잠깐 튀는 잡음은 무시 */
+    const hold=Math.max(3,Math.round(.12*fs));let mn=i0,up=0;i1=b;for(let i=i0+1;i<=b;i++){if(v[i]<v[mn]){mn=i;up=0}else if(v[i]-v[mn]>Math.max(.05,.04*v[mn])){if(++up>=hold){i1=mn;break}}else up=0}
+    /* 이렇게 잡은 구간이 0.5초 미만이면(추적 잡음으로 속도가 출렁임) 전체 구간으로 맞추고 R²로 믿을 만한지 알림 */
+    if(i1-i0<.5*fs&&b-a>=.5*fs){i0=a;i1=b;src='all'}}
+  if(i1<i0){const q=i0;i0=i1;i1=q}if(i1-i0<Math.max(4,Math.round(.25*fs)))return {short:true,i0,i1,tA:r.t[i0],tB:r.t[i1],dir,src};
+  /* 1/v를 시간에 대한 직선으로 맞춤(최소제곱). 0.2 m/s보다 느린 표본은 1/v가 커져 맞춤을 흔들어 뺌 */
+  let N=0,st=0,sy=0,stt=0,sty=0;for(let i=i0;i<=i1;i++){if(!(v[i]>.2))continue;const t=r.t[i]-r.t[i0],y=1/v[i];N++;st+=t;sy+=y;stt+=t*t;sty+=t*y}
+  if(N<5)return {short:true,i0,i1,tA:r.t[i0],tB:r.t[i1],dir,src};
+  const k=(N*sty-st*sy)/(N*stt-st*st),b0=(sy-k*st)/N,v0=1/b0;
+  const fit={t:[],v:[]};let ss=0,sr=0,mv=0,c=0;for(let i=i0;i<=i1;i++){mv+=v[i];c++}mv/=c;
+  for(let i=i0;i<=i1;i++){const t=r.t[i]-r.t[i0],f=1/(b0+k*t);fit.t.push(r.t[i]);fit.v.push(f);ss+=(v[i]-mv)**2;sr+=(v[i]-f)**2}
+  const T=r.t[i1]-r.t[i0],dist=dir*(r.X[i1]-r.X[i0]),vA=v[i0],vB=v[i1];let vMax=0;for(let i=e;i<=n-1-e;i++)vMax=Math.max(vMax,v[i]);
+  return {i0,i1,tA:r.t[i0],tB:r.t[i1],T,dir,src,vA,vB,v0,k,halfD:k>1e-6?Math.LN2/k:null,r2:ss>0?1-sr/ss:null,fit,
+    dist,vMean:dist/T,decel:(vA-vB)/T,loss:vA>0?(1-vB/vA)*100:null,dY:r.Y[i1]-r.Y[i0],vMax}}
+/* 스트림라인 자세(한 프레임): P = {hand,ear,shoulder,hip,knee,ankle} 화면 좌표 {x,y}(아래로 +). 손끝–발목 직선을 몸 기준선으로 봄.
+   dev: 각 점이 기준선에서 벗어난 거리(위 = 수면 쪽 +), 몸 길이 대비 비율과 m(ppm이 있을 때). tilt: 기준선이 수평에서 기운 각(앞이 높으면 +).
+   일직선 편차(rms)·가장 벗어난 곳(worst)은 어깨·골반·무릎만으로 계산: 머리(귀)는 모은 팔 아래에 있어 좋은 자세에서도 기준선보다 아래라 따로 봄.
+   각도: 어깨(골반–어깨–손끝), 골반(어깨–골반–무릎), 무릎(골반–무릎–발목). 180°가 일직선 */
+function streamlinePose(P,ppm){const K=['hand','shoulder','hip','knee','ankle'];if(!P||K.some(k=>!P[k]))return null;
+  const H=P.hand,A=P.ankle,dx=H.x-A.x,dy=-(H.y-A.y),L=Math.hypot(dx,dy);if(L<20)return null;
+  const ux=dx/L,uy=dy/L,nx=-uy*Math.sign(ux||1),ny=ux*Math.sign(ux||1); /* 법선은 항상 위쪽(수면 쪽)을 향함 */
+  const dev={},rel={};['ear','shoulder','hip','knee'].forEach(k=>{const q=P[k];if(!q)return;const px=q.x-A.x,py=-(q.y-A.y),d=px*nx+py*ny;rel[k]=d/L;dev[k]=ppm?d/ppm:null});
+  const ang3=(a,b,c)=>{const v1x=a.x-b.x,v1y=a.y-b.y,v2x=c.x-b.x,v2y=c.y-b.y,m=Math.hypot(v1x,v1y)*Math.hypot(v2x,v2y);return m?Math.acos(Math.max(-1,Math.min(1,(v1x*v2x+v1y*v2y)/m)))*180/Math.PI:null};
+  const ks=['shoulder','hip','knee'].filter(k=>rel[k]!=null),rms=Math.sqrt(ks.reduce((s,k)=>s+rel[k]*rel[k],0)/Math.max(1,ks.length));let worst=null;ks.forEach(k=>{if(!worst||Math.abs(rel[k])>Math.abs(rel[worst]))worst=k});
+  return {L,len:ppm?L/ppm:null,tilt:Math.atan2(dy,Math.abs(dx))*180/Math.PI,dev,rel,rms,rmsM:ppm?rms*L/ppm:null,worst,
+    ang:{sh:ang3(P.hip,P.shoulder,P.hand),hip:ang3(P.shoulder,P.hip,P.knee),knee:ang3(P.hip,P.knee,P.ankle)}}}
 /* ===== 자세 인식(관절 표지점)과 찍은 점 잇기 =====
    찍은 점 = 관절 표지점 + 차이. 차이를 그 관절이 속한 뼈(허벅지·정강이·발·머리)의 방향 기준으로 저장해, 몸이 돌면 차이도 같이 돌림.
    예전에는 화면 기준 차이를 첫 프레임에서 고정해, 첫 프레임 인식이 흔들리거나(가려진 발끝 등) 몸이 돌면 점이 관절에서 벗어났음 */
 const LPAIR={7:8,8:7,11:12,12:11,13:14,14:13,15:16,16:15,23:24,24:23,25:26,26:25,27:28,28:27,29:30,30:29,31:32,32:31};
 const LSEG={0:[7,0],7:[7,0],8:[8,0],11:[23,11],12:[24,12],13:[11,13],14:[12,14],15:[13,15],16:[14,16],23:[23,25],24:[24,26],25:[23,25],26:[24,26],27:[25,27],28:[26,28],29:[29,31],30:[30,32],31:[29,31],32:[30,32]};
 const mirSeg=s=>s.map(j=>LPAIR[j]!=null?LPAIR[j]:j);
-function segAng(LM,s){const A=LM[s[0]],B=LM[s[1]];if(!A||!B||A.v<.3||B.v<.3)return null;const dx=B.x-A.x,dy=B.y-A.y,L=Math.hypot(dx,dy);return L<3?null:{a:Math.atan2(dy,dx),L}}
-/* LM: 관절 [{x,y,v}], ids: 이 부위 후보(왼·오른쪽), p: 찍은 점 {x,y}, lim: 이보다 멀면 잇지 않음(px) */
-function plinkMake(LM,ids,p,lim){let b=null;ids.forEach(i=>{const q=LM&&LM[i];if(!q)return;const d=Math.hypot(q.x-p.x,q.y-p.y);if(!b||d<b.d)b={i,d}});if(!b||b.d>lim)return null;
+function segAng(LM,s,vmin){vmin=vmin==null?.3:vmin;const A=LM[s[0]],B=LM[s[1]];if(!A||!B||A.v<vmin||B.v<vmin)return null;const dx=B.x-A.x,dy=B.y-A.y,L=Math.hypot(dx,dy);return L<3?null:{a:Math.atan2(dy,dx),L}}
+/* LM: 관절 [{x,y,v}], ids: 이 부위 후보(왼·오른쪽), p: 찍은 점 {x,y}, lim: 이보다 멀면 잇지 않음(px),
+   vmin: 이 가시성 아래 관절은 믿지 않음(기본 0.3. 맑은 물속 영상은 무릎·발목 가시성이 0.02~0.5로 낮게 나와도 위치는 맞아서 수영 종목은 낮춤) */
+function plinkMake(LM,ids,p,lim,vmin){vmin=vmin==null?.3:vmin;let b=null;ids.forEach(i=>{const q=LM&&LM[i];if(!q)return;const d=Math.hypot(q.x-p.x,q.y-p.y);if(!b||d<b.d)b={i,d}});if(!b||b.d>lim)return null;
   const i=b.i,q=LM[i],dx=p.x-q.x,dy=p.y-q.y;let seg=LSEG[i]||null;if(seg&&i===0&&LM[8]&&LM[7]&&LM[8].v>LM[7].v)seg=[8,0];
-  const s=seg?segAng(LM,seg):null;if(!s)return {i,d:b.d,dx,dy,seg:null};
-  const c=Math.cos(s.a),sn=Math.sin(s.a);return {i,d:b.d,dx,dy,seg,al:dx*c+dy*sn,pe:-dx*sn+dy*c,ang:s.a,L0:s.L}}
+  const s=seg?segAng(LM,seg,vmin):null;if(!s)return {i,d:b.d,dx,dy,seg:null,vmin};
+  const c=Math.cos(s.a),sn=Math.sin(s.a);return {i,d:b.d,dx,dy,seg,al:dx*c+dy*sn,pe:-dx*sn+dy*c,ang:s.a,L0:s.L,vmin}}
 /* 관절 i(연결된 쪽 lk.i 또는 반대쪽)에 차이를 붙인 위치. 뼈가 처음의 40%보다 짧게 보이면(카메라 쪽을 향해 방향을 믿기 어려움) 직전 방향을 씀 */
-function plinkBase(LM,lk,i){const q=LM&&LM[i];if(!q||q.v<.3)return null;if(!lk.seg)return {x:q.x+lk.dx,y:q.y+lk.dy,v:q.v};
-  const s=segAng(LM,i===lk.i?lk.seg:mirSeg(lk.seg)),a=s&&s.L>=.4*lk.L0?s.a:lk.ang,c=Math.cos(a),sn=Math.sin(a);
+function plinkBase(LM,lk,i){const vm=lk.vmin==null?.3:lk.vmin,q=LM&&LM[i];if(!q||q.v<vm)return null;if(!lk.seg)return {x:q.x+lk.dx,y:q.y+lk.dy,v:q.v};
+  const s=segAng(LM,i===lk.i?lk.seg:mirSeg(lk.seg),vm),a=s&&s.L>=.4*lk.L0?s.a:lk.ang,c=Math.cos(a),sn=Math.sin(a);
   return {x:q.x+lk.al*c-lk.pe*sn,y:q.y+lk.al*sn+lk.pe*c,v:q.v,a}}
 /* 여러 프레임의 관절 위치 중앙값(한 장만 잘못 인식된 경우를 걸러 냄) */
 function lmMedian(Ls){Ls=Ls.filter(Boolean);if(Ls.length<3)return Ls.length?Ls[Ls.length-1]:null;return Ls[0].map((_,i)=>({x:median(Ls.map(L=>L[i].x)),y:median(Ls.map(L=>L[i].y)),v:median(Ls.map(L=>L[i].v))}))}
+/* 자세 인식이 몸을 뒤집어(머리↔발) 찾았는지. ref: 지금 추적 중인 점 [{ids,x,y}]. 점끼리의 방향(40px 넘는 쌍)과 인식된 같은 관절끼리의 방향을 비교해
+   반대인 쌍이 같은 쌍보다 많으면 뒤집힘. 쌍이 없으면(점 하나) 직전에 받아들인 몸 축(골반→어깨)과 반대일 때 뒤집힘.
+   누운 몸(수영)은 프레임 하나만 보고 인식하면 머리·발 방향을 자주 틀림(사용자 돌핀 영상 브라우저 시험: 첫 인식 8번 중 3~4번) */
+const lmMid=(LM,ids)=>{const q=ids.map(i=>LM[i]).filter(Boolean);return q.length?{x:q.reduce((a,p)=>a+p.x,0)/q.length,y:q.reduce((a,p)=>a+p.y,0)/q.length}:null};
+function lmAxis(LM){const a=lmMid(LM,[23,24]),b=lmMid(LM,[11,12]);if(!a||!b)return null;const d=Math.hypot(b.x-a.x,b.y-a.y);return d<5?null:{x:(b.x-a.x)/d,y:(b.y-a.y)/d}}
+function lmFlipped(LM,ref,prevAx){let pos=0,neg=0;ref=ref||[];
+  for(let a=0;a<ref.length;a++)for(let b=a+1;b<ref.length;b++){const A=ref[a],B=ref[b],dx=B.x-A.x,dy=B.y-A.y,d=Math.hypot(dx,dy);if(d<40)continue;
+    const la=lmMid(LM,A.ids),lb=lmMid(LM,B.ids);if(!la||!lb)continue;const ex=lb.x-la.x,ey=lb.y-la.y,e=Math.hypot(ex,ey);if(e<10)continue;const c=(dx*ex+dy*ey)/(d*e);if(c>.3)pos++;else if(c<-.3)neg++}
+  if(pos||neg)return neg>pos;
+  const ax=prevAx&&lmAxis(LM);return !!(ax&&ax.x*prevAx.x+ax.y*prevAx.y<-.3)}
+/* 자세 인식 관절 → 스트림라인 자세 점. 카메라 쪽(가시성 합이 큰 쪽) 관절을 쓰고, 손끝은 몸 축 방향으로 가장 앞에 있는 손 관절.
+   손끝·어깨·골반·무릎이 몸 축을 따라 차례로 놓이지 않거나, 진행 방향(dir)과 머리 쪽이 반대면(머리↔발 뒤집힘) null */
+function slFromLM(L,dir){if(!L)return null;const vis=ids=>ids.reduce((s,i)=>s+(L[i]?L[i].v:0),0),side=vis([11,23,25,27])>=vis([12,24,26,28])?0:1,q=i=>L[i]?[Math.round(L[i].x*10)/10,Math.round(L[i].y*10)/10]:null,g=(a,b)=>q(side?b:a);
+  const sh=L[side?12:11],an=L[side?28:27];if(!sh||!an)return null;const ax=sh.x-an.x,ay=sh.y-an.y;if(Math.hypot(ax,ay)<10)return null;
+  let hand=null,hb=-1e9;[15,16,17,18,19,20].forEach(i=>{const p=L[i];if(!p)return;const pr=(p.x-an.x)*ax+(p.y-an.y)*ay;if(pr>hb){hb=pr;hand=i}});if(hand==null)return null;
+  const P={hand:q(hand),ear:g(7,8),shoulder:g(11,12),hip:g(23,24),knee:g(25,26),ankle:g(27,28)};if(['shoulder','hip','knee','ankle'].some(k=>!P[k]))return null;
+  const pr=k=>(P[k][0]-an.x)*ax+(P[k][1]-an.y)*ay;if(!(pr('hand')>pr('shoulder')&&pr('shoulder')>pr('hip')&&pr('hip')>pr('knee')&&pr('knee')>pr('ankle')))return null;
+  if(dir&&dir*(P.hand[0]-P.ankle[0])<=0)return null;if(!P.ear)delete P.ear;return P}
+/* 인식된 몸이 지금 따라가는 점들 근처인지: 점들의 가운데와 그 점들 관절의 가운데가 gate(px) 안. 머리↔발이 뒤집혀도 가운데는 비슷해 통과(뒤집힘은 lmFlipped가 거름).
+   찍은 선수가 화면 밖·물속으로 사라졌을 때 다른 사람(출발대 옆에 앉은 사람 등)으로 옮겨 가는 것을 막음 */
+function lmNear(LM,ref,gate){let ax=0,ay=0,bx=0,by=0,n=0;(ref||[]).forEach(r=>{const m=lmMid(LM,r.ids);if(!m)return;ax+=r.x;ay+=r.y;bx+=m.x;by+=m.y;n++});return !n||!(gate>0)||Math.hypot(ax-bx,ay-by)/n<=gate}
 function boneOk(r,B){return !B||!B.P||!B.L||Math.abs(Math.hypot(r.x-B.P.x,r.y-B.P.y)-B.L)<=Math.max(.15*B.L,5)}
 /* 한 점을 한 프레임 따라가기(처음 추적·고친 점 다시 추적 공통).
    s: {trk: 무늬 추적기, lk: 자세 연결(없으면 무늬만)}, F: 화면 특징, LM: 이 프레임 자세 인식(없으면 null),
@@ -482,7 +538,9 @@ function stepPt(s,F,LM,o){o=o||{};const T=s.trk,prev={x:T.pos.x,y:T.pos.y},rad=M
     if(j!=null){const b2=plinkBase(LM,lk,j);if(b2){const d2=Math.hypot(b2.x-pred.x,b2.y-pred.y);
       /* 원래 쪽이 안 보이면(가시성 낮음) 반대쪽이 예측 자리 가까이(뼈 길이의 30%, 최소 8px) 있을 때만 옮겨 탐 */
       if(b?d2+Math.max(6,.25*(lk.L0||40))<Math.hypot(b.x-pred.x,b.y-pred.y):d2<=Math.max(8,.3*(lk.L0||40))){lk.i=j;if(lk.seg)lk.seg=mirSeg(lk.seg);b=b2;s.swaps=(s.swaps||0)+1}}}
-    if(b&&b.a!=null)lk.ang=b.a}
+    if(b&&b.a!=null)lk.ang=b.a;
+    /* 갑자기 멀리 튄 자세 위치(뒤집힌 인식·다른 사람 등)는 받지 않음. 같은 쪽으로 3프레임 이어지면(추적이 틀렸던 것) 그때 받아들임 */
+    if(b){const gate=o.gate||Math.max(3*T.R,40);if(Math.hypot(b.x-pred.x,b.y-pred.y)>gate){s.rejN=s.rej&&Math.hypot(b.x-s.rej.x,b.y-s.rej.y)<=gate?(s.rejN||1)+1:1;s.rej={x:b.x,y:b.y};if(s.rejN<3)b=null;else{s.rejN=0;s.rej=null}}else{s.rejN=0;s.rej=null}}}
   if(b){const q=T.near(F,b.x,b.y,rad);
     if(q&&q.score>=.7&&Math.hypot(q.x-b.x,q.y-b.y)<=rad+.5){T.setPos(q.x,q.y,prev);T.lost=0;return {x:q.x,y:q.y,score:Math.min(1,Math.max(b.v,q.score)),src:'pose'}}
     /* 화면 밖으로 나간 관절(자세 인식이 짐작한 자리)은 불확실 */
@@ -546,24 +604,28 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
 const f2=v=>v==null?'–':v.toFixed(2),f1=v=>v==null?'–':v.toFixed(1),f0=v=>v==null?'–':String(Math.round(v));
 const vid=document.getElementById('vid'),wk=document.createElement('canvas');let wctx=null;
-const V={bgsub:false,bgImg:null,ai:null,aiBusy:false,aiMsg:'',aiOpen:false,tmode:'tmpl',has:false,dur:0,cw:405,ch:720,cur:0,t0:0,t1:0,slow:1,rate:60,name:'',mass:'',cal:{a:null,b:null,cm:45},target:null,half:16,track:null,res:null,mode:null,busy:false,abort:false,playing:false,chart:'vy',tmp:null,prog:'',preset:'pu1',extra:{},tIdx:0,fixK:'main',sport:'pullup',body:'',bar:null,man:{},rep:null,fixes:[],restoreMsg:''};
+const V={bgsub:false,bgImg:null,ai:null,aiBusy:false,aiMsg:'',aiOpen:false,tmode:'tmpl',has:false,dur:0,cw:405,ch:720,cur:0,t0:0,t1:0,slow:1,rate:60,name:'',mass:'',cal:{a:null,b:null,cm:45},target:null,half:16,track:null,res:null,mode:null,busy:false,abort:false,playing:false,chart:'vy',tmp:null,prog:'',preset:'sl1',extra:{},tIdx:0,fixK:'main',sport:'streamline',body:'',bar:null,man:{},rep:null,fixes:[],restoreMsg:''};
 /* 추적 구성: 주 추적점 하나는 항상 있고, 각도용 점을 더할 수 있음 */
-const SPORT={pullup:{pmain:[0,7,8],tmode:'tmpl',n:'중량 풀업',main:'머리 추적점',presets:['pu1','pu2'],cm:45,rate:60,massL:'추가 중량(kg)',
+const SPORT={streamline:{pmain:[23,24],tmode:'tmpl',vmin:.02,n:'스트림라인 (벽 푸시·글라이드)',main:'골반',presets:['sl1'],cm:230,rate:60,win:.08,swim:true,
+   cal:'<b>몸 전체가 보이는 프레임</b>에서 <b>손끝</b>을 먼저, <b>발끝</b>을 다음에 찍고, 실제 길이에 내 <b>스트림라인 길이</b>를 넣습니다. 벽에 등을 대고 두 팔을 머리 위로 모아 뻗은 채 까치발로 섰을 때 바닥에서 손끝까지의 높이입니다. 바닥 선·레인로프는 선수보다 멀리 있어 쓰면 속도가 틀어집니다. 속도·감속 계수·절반 속도 거리는 이 값에 따라 바뀌고, 속도 감소율과 자세 각도는 상관없습니다.',
+   tgt:'<b>골반</b>: 수영복 옆면 가운데(허벅지 맨 위 바깥쪽 뼈 높이)를 찍습니다. 수영복 무늬가 뚜렷해 무늬만으로 잘 따라갑니다.'},
+ dolphin:{bgsub:false,pmain:[27,28],tmode:'pose',vmin:.02,n:'돌핀킥 (수중)',main:'발목',presets:['dk1','dk2','dk0'],cm:100,rate:60,win:.04,swim:true,
+   cal:'선수와 같은 거리(같은 레인)에 있는, 길이를 아는 두 점을 찍습니다. 레인 바닥 선의 T자 끝, 벽 타일 줄 등. 킥 템포·횟수는 이 값과 상관없고, 진폭·속도에만 쓰입니다.',
+   tgt:'<b>발목</b>: 바깥 복사뼈를 찍습니다. 물속에서 잘 안 보이면 발등과 정강이가 만나는 곳의 윤곽을 찍습니다.'},
+ start:{pmain:[7,8,0],tmode:'pose',n:'수영 스타트',main:'머리(수모)',presets:['st3','st2','st1','st0'],cm:500,rate:120,win:.03,swim:true,
+   cal:'<b>먼저 출발벽(0 m)</b>을, 그다음 거리를 아는 표시를 찍습니다. 레인로프 빨간 구간의 끝(5 m)이 가장 쉽고, 이때 500을 넣습니다. 먼저 찍은 점이 거리 0이 됩니다.',
+   tgt:'<b>머리</b>: 출발대 위 준비 자세에서 수모 가운데(로고나 색 경계가 있으면 그곳)를 찍습니다.'},
+ pullup:{pmain:[0,7,8],tmode:'tmpl',n:'중량 풀업',main:'머리 추적점',presets:['pu1','pu2'],cm:45,rate:60,massL:'추가 중량(kg)',
    cal:'벨트에 단 원판의 <b>세로 지름</b>(위 끝–아래 끝)을 찍습니다. 범퍼·20kg 원판은 보통 45cm입니다. 사선에서 찍어도 세로 지름은 거의 그대로입니다.',
    tgt:'옆에서 찍었으면 <b>턱 끝</b>, 뒤나 사선 뒤에서 찍었으면 <b>뒤통수 가운데</b>(머리카락 무늬가 잘 따라갑니다)를 찍습니다.'},
  cmj:{pmain:[23,24],tmode:'pose',n:'CMJ (반동 점프)',main:'골반',presets:['cm1','cm2','cm0'],cm:100,rate:120,massL:'추가 중량(kg, 조끼 등)',
    cal:'몸과 같은 거리에 있는, 길이를 아는 두 점을 찍습니다. 몸 옆 벽이나 기둥에 100cm 간격으로 테이프를 붙여 두면 편합니다.',
    tgt:'<b>골반</b>: 허벅지 맨 위 바깥쪽 뼈(대전자) 위치를 찍습니다. 바지 로고·솔기처럼 무늬가 있는 곳이면 더 잘 따라갑니다.'},
- start:{pmain:[7,8,0],tmode:'pose',n:'수영 스타트',main:'머리(수모)',presets:['st3','st2','st1','st0'],cm:500,rate:120,win:.03,swim:true,
-   cal:'<b>먼저 출발벽(0 m)</b>을, 그다음 거리를 아는 표시를 찍습니다. 레인로프 빨간 구간의 끝(5 m)이 가장 쉽고, 이때 500을 넣습니다. 먼저 찍은 점이 거리 0이 됩니다.',
-   tgt:'<b>머리</b>: 출발대 위 준비 자세에서 수모 가운데(로고나 색 경계가 있으면 그곳)를 찍습니다.'},
- dolphin:{bgsub:true,pmain:[27,28],tmode:'tmpl',n:'돌핀킥 (수중)',main:'발목',presets:['dk1','dk2','dk0'],cm:100,rate:60,win:.04,swim:true,
-   cal:'선수와 같은 거리(같은 레인)에 있는, 길이를 아는 두 점을 찍습니다. 레인 바닥 선의 T자 끝, 벽 타일 줄 등. 킥 템포·횟수는 이 값과 상관없고, 진폭·속도에만 쓰입니다.',
-   tgt:'<b>발목</b>: 바깥 복사뼈를 찍습니다. 물속에서 잘 안 보이면 발등과 정강이가 만나는 곳의 윤곽을 찍습니다.'},
  free:{pmain:null,tmode:'tmpl',n:'기타 (바벨 등)',main:'주 추적점',presets:['one','hipknee','angle3'],cm:45,rate:60,massL:'무게(kg, 선택)',
    cal:'길이를 아는 두 점을 찍습니다. 표준 원판 지름은 45cm입니다. 추적할 물체와 카메라에서 같은 거리에 있는 것이어야 합니다.',
    tgt:'속도를 잴 물체에서 무늬나 경계가 뚜렷한 곳(바벨 끝, 원판 중심 등)을 찍습니다.'}};
-const PRESET={pu1:{n:'머리 추적점만 (속도·이동 거리)',pts:[],ang:[],bones:[]},
+const PRESET={sl1:{n:'골반 (글라이드 속도·감속)',pts:[],ang:[],bones:[]},
+ pu1:{n:'머리 추적점만 (속도·이동 거리)',pts:[],ang:[],bones:[]},
  pu2:{n:'머리 추적점 + 팔꿈치 각도 (끝까지 내려왔는지)',pts:[['shoulder','어깨'],['elbow','팔꿈치'],['wrist','손목']],ang:[{n:'팔꿈치',pts:['shoulder','elbow','wrist']}],bones:[['shoulder','elbow'],['elbow','wrist']]},
  cm1:{n:'골반 + 발끝 (점프 높이)',pts:[['toe','발끝']],ang:[],bones:[]},
  cm2:{n:'골반 + 무릎·발목·발끝 (높이 + 무릎 각도)',pts:[['knee','무릎'],['ankle','발목'],['toe','발끝']],ang:[{n:'무릎',pts:['main','knee','ankle']}],bones:[['main','knee'],['knee','ankle'],['ankle','toe']]},
@@ -580,6 +642,10 @@ const PRESET={pu1:{n:'머리 추적점만 (속도·이동 거리)',pts:[],ang:[]
  angle3:{n:'한 점 + 각도 1개 (세 점 직접 지정)',pts:[['a1','각도 점 1'],['a2','꼭짓점'],['a3','각도 점 3']],ang:[{n:'각도',pts:['a1','a2','a3']}],bones:[['a1','a2'],['a2','a3']]}};
 const PHINT={hip:'<b>골반</b>: 노랑 스티커 중심(대전자). 스티커가 없으면 허벅지 맨 위 바깥쪽 뼈, 수영복 아래 끝 옆선 근처입니다.',shoulder:'<b>어깨</b>: 어깨 끝 뼈 바로 아래, 위팔이 시작되는 둥근 부분의 가운데.',elbow:'<b>팔꿈치</b>: 팔꿈치 바깥쪽 뼈의 가운데.',wrist:'<b>손목</b>: 손목 바깥쪽(새끼손가락 쪽) 튀어나온 뼈.',knee:'<b>무릎</b>: 주황 스티커 중심(무릎 바깥쪽 뼈 돌기). 스티커가 없으면 무릎 바깥쪽 측면의 가운데. 앞쪽 슬개골이 아닙니다. 다리 윤곽이 상자에 들어오게 추적 상자를 크게 두세요.',ankle:'<b>발목</b>: 흰 스티커 중심(바깥 복사뼈의 가운데).',toe:'<b>발끝</b>: 신발 앞코 끝, 바닥에 닿는 점. 이륙·착지를 이 점으로 잽니다. 스티커는 붙이지 않습니다.',a1:'각도를 이루는 첫 번째 점.',a2:'각도를 잴 꼭짓점(관절).',a3:'각도를 이루는 세 번째 점.'};
 const PHINT_SP={start:{toe:'<b>앞발 발끝(띠)</b>: 출발대 앞 끝에 건 발가락 끝. 이 점은 따라가지 않고, 이 자리의 얇은 띠 화면이 빈 출발대처럼 바뀌는 순간을 이탈로 잽니다. 손에 가려도 발가락이 있을 자리(출발대 앞 끝)를 찍으면 됩니다.',knee:'<b>앞다리 무릎</b>: 출발대 앞 끝에 발을 건 다리의 무릎 바깥쪽 가운데(주황 스티커 자리). 스티커가 없어도 자세 인식(AI)이 무릎을 따라갑니다.',ankle:'<b>앞발 발목</b>: 앞발 바깥 복사뼈. 손에 가려 안 보이면 정강이 아래 끝 윤곽을 찍으세요. 자세 인식이 발목을 따라가고, 어긋나면 결과에서 고칠 수 있습니다.'}},phint=k=>(PHINT_SP[V.sport]||{})[k]||PHINT[k];
+/* 스트림라인 자세 점(결과에서 한 프레임에 찍음). V.man.pose = {t: 영상 시각, P: {키: [x,y]}, ai: AI가 찾았는지} */
+const SLK=[['hand','손끝'],['ear','머리(귀)'],['shoulder','어깨'],['hip','골반'],['knee','무릎'],['ankle','발목']];
+const SLH={hand:'앞으로 뻗은 손의 가장 앞 끝(가운뎃손가락 끝)',ear:'귀 구멍 근처. 팔에 가려 안 보이면 머리 옆면 가운데',shoulder:'어깨 관절(위팔이 시작되는 둥근 부분 가운데)',hip:'골반 옆(허벅지 맨 위 바깥쪽 뼈), 수영복 옆면 가운데',knee:'무릎 옆면 가운데',ankle:'바깥 복사뼈'};
+const slPts=P=>{const o={};Object.keys(P||{}).forEach(k=>{const q=P[k];if(q)o[k]={x:q[0],y:q[1]}});return o};
 const winOf=()=>SPORT[V.sport].win||(V.sport==='cmj'?.03:.06);
 const ptList=()=>[['main',SPORT[V.sport].main]].concat(PRESET[V.preset].pts),ptPos=k=>k==='main'?V.target:(V.extra[k]||null),allSet=()=>ptList().every(p=>ptPos(p[0]));
 /* 고정점(출발대 발끝 띠): 찍기만 하고 따라가지 않는 점 */
@@ -636,9 +702,14 @@ function demoDolphin(){const px=48,fs=60,f=2.2,A=.45,v=1.6,df=.45,tr={t:[],x:[],
   const s=t=>{const ph=(t*f)%1;return ph<df?A/2*Math.cos(Math.PI*ph/df):-A/2*Math.cos(Math.PI*(ph-df)/(1-df))};
   for(let i=0;i<=3*fs;i++){const t=i/fs,hx=v*t,hy=.03*Math.sin(2*Math.PI*f*t+1),ax=hx-.95,ay=hy+s(t+.1);tr.t.push(t);tr.x.push(70+ax*px);tr.y.push(420-ay*px);tr.c.push(1);tr.P.hip.x.push(70+hx*px);tr.P.hip.y.push(420-hy*px);tr.P.hip.c.push(1)}
   return {tr,cal:[[40,560],[40+2*px,560]],cm:200,bar:null,cur:1.2}}
+/* 스트림라인 예시: 2차 항력(v0 2.3 m/s, k 0.24/m)으로 감속하는 골반, 0.8초 프레임에 골반이 약간 처진 자세 */
+function demoStreamline(){const px=130,fs=60,v0=2.3,k=.24,x0=40,y0=190,tr={t:[],x:[],y:[],c:[]},X=t=>Math.log(1+k*v0*t)/k,Y=t=>.05*smo(t/2.2);
+  for(let i=0;i<=2.2*fs;i++){const t=i/fs;tr.t.push(t);tr.x.push(x0+X(t)*px);tr.y.push(y0-Y(t)*px);tr.c.push(1)}
+  const tp=.8,hx=x0+X(tp)*px,hy=y0-Y(tp)*px,m=v=>v*px,P={hand:[hx+m(1.3),hy-m(.06)],ear:[hx+m(.68),hy-m(.05)],shoulder:[hx+m(.55),hy-m(.07)],hip:[hx,hy],knee:[hx-m(.45),hy-m(.06)],ankle:[hx-m(.88),hy-m(.07)]};
+  return {tr,cal:[[P.hand[0],hy+m(.8)],[hx-m(1),hy+m(.8)]],cm:230,bar:null,cur:tp,man:{pose:{t:tp,P}},cw:720,ch:405}}
 function setDemo(){resetUndo();V.tmode=SPORT[V.sport].tmode||'tmpl';V.bgsub=!!SPORT[V.sport].bgsub;V.has=false;V.slow=1;V.target=null;V.extra={};V.man={};V.mode=null;V.fixes=[];V.restoreMsg='';V.fixK='main';V.preset=SPORT[V.sport].presets[0];
-  const d=V.sport==='pullup'?demoPull():V.sport==='cmj'?demoCmj():V.sport==='start'?demoStart():V.sport==='dolphin'?demoDolphin():{tr:demoTrack(),cal:[[190,650],[190,515]],cm:45,bar:null,cur:1};
-  V.track=d.tr;V.dur=d.tr.t[d.tr.t.length-1];V.cw=405;V.ch=720;V.t0=0;V.t1=V.dur;V.cur=d.cur;V.cal={a:d.cal[0],b:d.cal[1],cm:d.cm};V.bar=d.bar;if(d.man)V.man=d.man;reanalyze()}
+  const d=V.sport==='streamline'?demoStreamline():V.sport==='pullup'?demoPull():V.sport==='cmj'?demoCmj():V.sport==='start'?demoStart():V.sport==='dolphin'?demoDolphin():{tr:demoTrack(),cal:[[190,650],[190,515]],cm:45,bar:null,cur:1};
+  V.track=d.tr;V.dur=d.tr.t[d.tr.t.length-1];V.cw=d.cw||405;V.ch=d.ch||720;V.t0=0;V.t1=V.dur;V.cur=d.cur;V.cal={a:d.cal[0],b:d.cal[1],cm:d.cm};V.bar=d.bar;if(d.man)V.man=d.man;if(V.sport==='streamline')V.chart='vx';else if(V.chart==='vx'&&!SPORT[V.sport].swim)V.chart='vy';reanalyze()}
 const pxPerM=()=>{const c=V.cal;return c.a&&c.b&&c.cm>0?Math.hypot(c.a[0]-c.b[0],c.a[1]-c.b[1])/(c.cm/100):null};
 function totalMass(){const a=parseFloat(V.mass)||0,b=parseFloat(V.body)||0;if(V.sport==='free')return a||(V.has?0:30);if(!V.has&&!b)return 75+a;return b?b+a:0}
 function frameDt(){const t=V.track&&V.track.t;if(!t||t.length<3)return null;const d=[];for(let i=1;i<t.length;i++)d.push(t[i]-t[i-1]);return median(d)/V.slow}
@@ -650,6 +721,8 @@ function sportReport(p){const r=V.res,tr=V.track;
     const o={band,toe,foot,mass:totalMass(),dtFrame:frameDt()};let R=cmjReport(r,o);
     if(R&&(V.man.to!=null||V.man.ld!=null)){const to=V.man.to!=null?(V.man.to-tr.t[0])/V.slow:R.to,ld=V.man.ld!=null?(V.man.ld-tr.t[0])/V.slow:R.ld;if(to!=null&&ld!=null&&ld>to)R=cmjReport(r,Object.assign({},o,{manual:{to,ld}}))}
     return R}
+  if(V.sport==='streamline'){const vt=v=>v==null?null:(v-tr.t[0])/V.slow,R=glideReport(r,{tA:vt(V.man.gA),tB:vt(V.man.gB)});
+    if(R){const pz=V.man.pose;R.pose=pz&&pz.P?streamlinePose(slPts(pz.P),p):null;R.poseT=pz?pz.t:null}return R}
   if(SPORT[V.sport].swim){const T=tr.t.map(v=>(v-tr.t[0])/V.slow),vt=v=>v==null?null:(v-tr.t[0])/V.slow;
     let hip=null,hipOff=null;if(tr.P&&tr.P.hip&&tr.P.hip.x.length===tr.t.length){hip=analyze({t:tr.t,x:tr.P.hip.x,y:tr.P.hip.y,c:tr.P.hip.c},{pxPerM:p,slow:V.slow,rate:V.rate,win:winOf()});hipOff={dx:(tr.P.hip.x[0]-tr.x[0])/p,dy:-(tr.P.hip.y[0]-tr.y[0])/p};if(!hip||hip.t.length!==r.t.length){hip=null;hipOff=null}}
     if(V.sport==='dolphin')return dolphinReport(r,{hip,hipOff});
@@ -705,13 +778,19 @@ function poseLoader(){if(poseP)return poseP;poseP=(async()=>{const M=await impor
   const mk=dl=>M.PoseLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:POSE.model,delegate:dl},runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.4,minPosePresenceConfidence:.4,minTrackingConfidence:.4});
   try{return await mk('GPU')}catch(e){return await mk('CPU')}})();poseP.catch(()=>{poseP=null});return poseP}
 const poseIdx=k=>k==='main'?SPORT[V.sport].pmain:PMAP[k]||null;
-function poseDetect(pl,dt){poseTs+=Math.max(1,Math.round(dt*1000));try{const r=pl.detectForVideo(wk,poseTs);return r&&r.landmarks&&r.landmarks[0]?r.landmarks[0].map(q=>({x:q.x*V.cw,y:q.y*V.ch,v:q.visibility==null?1:q.visibility})):null}catch(e){return null}}
+/* 자세 인식 입력은 정사각형 캔버스(가운데 정렬, rot만큼 90°씩 돌림): 가로로 긴 화면을 그대로 넣으면 누운 몸의 관절 좌표가 틀어짐
+   (MediaPipe 경고 'NORM_RECT … only supported for the square ROI'). 돌린 그림에서 찾은 좌표는 원래 화면 좌표로 되돌림 */
+let poseQ=null;
+function poseDetect(pl,dt,rot){rot=rot||0;poseTs+=Math.max(1,Math.round(dt*1000));const S=Math.max(V.cw,V.ch);if(!poseQ||poseQ.width!==S){poseQ=document.createElement('canvas');poseQ.width=S;poseQ.height=S}
+  const c=poseQ.getContext('2d'),cx=V.cw/2,cy=V.ch/2,co=[1,0,-1,0][rot&3],si=[0,-1,0,1][rot&3];
+  c.setTransform(1,0,0,1,0,0);c.fillStyle='#000';c.fillRect(0,0,S,S);if(rot>=0){c.setTransform(co,si,-si,co,S/2-(co*cx-si*cy),S/2-(si*cx+co*cy));c.drawImage(wk,0,0);c.setTransform(1,0,0,1,0,0)}
+  try{const r=pl.detectForVideo(poseQ,poseTs);return r&&r.landmarks&&r.landmarks[0]?r.landmarks[0].map(q=>{const X=q.x*S-S/2,Y=q.y*S-S/2;return {x:co*X+si*Y+cx,y:-si*X+co*Y+cy,v:q.visibility==null?1:q.visibility}}):null}catch(e){return null}}
 
 /* ----- BAZE API로 관절 위치 확인: 현재 프레임 한 장을 AI 모델에 보내 점 위치를 받아 추적 결과와 비교, 원하면 그 위치로 고침 -----
    키는 이 브라우저(localStorage 'mv_baze')에만 저장. OpenAI 호환 /chat/completions, 모델 목록은 /models/ */
 const BAZE={base:'https://api.baze.co/v1/gateway',get(){return LS.get('mv_baze',{key:'',model:'',models:[]})},set(o){LS.set('mv_baze',Object.assign(this.get(),o))}};
 const PEN={main:null,hip:'hip (greater trochanter, side of the pelvis)',knee:'knee joint center (side view)',ankle:'ankle (lateral malleolus, outer ankle bone)',toe:'toe tip of the foot (front end of the shoe or foot)',heel:'heel',shoulder:'shoulder joint (acromion)',elbow:'elbow (lateral epicondyle)',wrist:'wrist (ulnar styloid)',a1:null,a2:null,a3:null};
-const MAINEN={pullup:'chin tip (or center of the back of the head if seen from behind)',cmj:'hip (greater trochanter, side of the pelvis)',start:'center of the swim cap / head',dolphin:'ankle (lateral malleolus, outer ankle bone)',free:null};
+const MAINEN={streamline:'hip (greater trochanter, side of the pelvis)',pullup:'chin tip (or center of the back of the head if seen from behind)',cmj:'hip (greater trochanter, side of the pelvis)',start:'center of the swim cap / head',dolphin:'ankle (lateral malleolus, outer ankle bone)',free:null};
 function bazeErr(e){if(e&&e.status===401)return 'API 키가 맞지 않습니다(401). 키를 다시 확인해 주세요.';if(e&&e.status===429)return '사용량 한도를 넘었습니다(429). 잠시 뒤 다시 시도하세요.';if(e&&e.status)return 'BAZE 응답 오류('+e.status+'). '+(e.msg||'');
   return 'BAZE에 연결하지 못했습니다. 인터넷 연결을 확인하고, claude.ai 화면이라면 공유 주소(swim-analysis-lab.github.io)에서 열어 주세요. 공유 주소에서도 안 되면 BAZE가 브라우저 직접 호출을 막고 있는 것입니다.'}
 async function bazeFetch(path,body){const c=BAZE.get();if(!c.key)throw {msg:'nokey'};let r;
@@ -760,7 +839,19 @@ function bgFeat(F,bg){const n=F.w*F.h,g=new Float32Array(n);for(let q=0;q<n;q++)
 /* ----- 추적 실행 ----- */
 /* 자세 인식: 같은 화면을 여러 번 인식. 영상 모드는 앞 프레임 결과를 이어 쓰므로, 처음 프레임이나 건너뛴 프레임은 두세 번 돌려야 관절 자리가 잡힘
    (사용자 스타트 영상 첫 프레임: 한 번만 인식하면 손에 가린 발끝이 40px 어긋났음) */
-function poseWarm(pl,n){let L=null;for(let k=0;k<(n||3);k++){const r=poseDetect(pl,.033);if(r)L=r}return L}
+function poseWarm(pl,n,rot){let L=null;for(let k=0;k<(n||3);k++){const r=poseDetect(pl,.033,rot);if(r)L=r}return L}
+/* 프레임 하나의 자세 인식(뒤집힘 확인 포함). ps: {rot 지금 쓰는 회전, ax 직전 몸 축, fresh 앞 인식과 이어지지 않음(빈 화면으로 비우고 3번 인식)}. ref: 추적 중인 점 [{ids,x,y}].
+   뒤집혔으면 인식 상태를 비우고 다른 회전(0·90·270·180°)으로 다시 인식해 맞는 회전을 계속 씀. 사람을 못 찾으면 5프레임에 한 번만 다른 회전을 시도(화면에 사람이 없을 때 느려지지 않게) */
+function poseAt(pl,dt,ref,ps){const fr=ps.fresh;ps.fresh=false;if(fr){poseDetect(pl,.033,-1);poseDetect(pl,.033,-1)}
+  const first=fr?poseWarm(pl,3,ps.rot):poseDetect(pl,dt,ps.rot);
+  const ok=L=>L&&lmNear(L,ref,ps.gate)&&!lmFlipped(L,ref,ps.ax);
+  if(ok(first)){ps.miss=0;const ax=lmAxis(first);if(ax)ps.ax=ax;return first}
+  /* 뒤집힘이면 바로 다른 회전으로, 못 찾음·다른 사람(멀리)이면 5프레임마다 한 번만 다시 시도 */
+  const flip=!!first&&lmNear(first,ref,ps.gate);ps.miss=(ps.miss||0)+1;ps.n=(ps.n||0)+1;if(flip)ps.flip=(ps.flip||0)+1;else if(first)ps.far=(ps.far||0)+1;
+  if(!flip&&ps.miss%5!==1)return null;
+  for(const rot of [0,1,3,2].filter(r=>r!==ps.rot)){poseDetect(pl,.033,-1);poseDetect(pl,.033,-1);const L=poseWarm(pl,3,rot);
+    if(ok(L)){ps.rot=rot;ps.miss=0;ps.n--;const ax=lmAxis(L);if(ax)ps.ax=ax;return L}}
+  ps.fresh=true;return null}
 const lmPack=L=>{if(!L)return null;const a=new Float32Array(L.length*3);L.forEach((q,i)=>{a[3*i]=q.x;a[3*i+1]=q.y;a[3*i+2]=q.v});return a};
 const lmUnpack=a=>{if(!a)return null;const L=[];for(let i=0;i<a.length;i+=3)L.push({x:a[i],y:a[i+1],v:a[i+2]});return L};
 async function loadPose(keys){if(V.tmode!=='pose'||!keys.some(k=>poseIdx(k)))return null;V.prog='자세 인식 모델 불러오는 중(처음 한 번 약 30MB)';uiState();let pl=null;
@@ -773,14 +864,14 @@ async function runTrack(){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.abor
   if(fb){tr.fd=[];tr.fdBox=fb;tr.fbp=[]}keys.slice(1).forEach(k=>tr.P[k]={x:[],y:[],c:[]});const arr=k=>k==='main'?tr:tr.P[k];
   keys.forEach(k=>{const p=ptPos(k);st[k]={pos:{x:p[0],y:p[1]}}});
   let init=false,last=null,chain=null,parent=null,boneL=null,lastTs=null,sil=null;V.track=tr;
-  const pl=await loadPose(keys),BG=V.bgsub?await buildBg():null;V.prog='';
+  const pl=await loadPose(keys),BG=V.bgsub?await buildBg():null,ps={rot:0,ax:null,fresh:true,gate:Math.max(80,.15*Math.hypot(w,h))},vmin=SPORT[V.sport].vmin,lim=.08*Math.hypot(w,h);V.prog='';
   for(let i=0;i<times.length;i++){if(V.abort)break;const mt=await seekTo(times[i]);
     if(mt!=null&&init&&tr.t.length&&mt<=tr.t[tr.t.length-1]+1e-5)continue; /* 같은 프레임이 다시 잡힘 */
     grab();const F0raw=toFeat(wctx.getImageData(0,0,w,h).data,w,h),g=F0raw.g,F=BG?bgFeat(F0raw,BG.bg):F0raw;
     let sum=0;for(let q=0;q<g.length;q+=97)sum+=g[q];
     if(mt==null&&init&&sum===last)continue; /* 프레임 시각을 모를 때: 앞과 완전히 같은 그림은 중복으로 보고 건너뜀 */
     last=sum;const ts=mt!=null?mt:times[i];
-    const LM=pl?(init?poseDetect(pl,lastTs==null?.033:Math.max(.001,ts-lastTs)):poseWarm(pl,3)):null;lastTs=ts;
+    const LM=pl?poseAt(pl,lastTs==null?.033:Math.max(.001,ts-lastTs),keys.filter(k=>poseIdx(k)).map(k=>({ids:poseIdx(k),x:st[k].pos.x,y:st[k].pos.y})),ps):null;lastTs=ts;
     if(fb){const bw=fb.x1-fb.x0+1;if(!fref){fref=new Float32Array(bw*(fb.y1-fb.y0+1));for(let y=fb.y0,q=0;y<=fb.y1;y++)for(let x=fb.x0;x<=fb.x1;x++,q++)fref[q]=g[y*w+x]}
       let sd=0,q=0;const bp=new Uint8Array(fref.length);for(let y=fb.y0;y<=fb.y1;y++)for(let x=fb.x0;x<=fb.x1;x++,q++){sd+=Math.abs(g[y*w+x]-fref[q]);bp[q]=g[y*w+x]}tr.fd.push(sd/q);tr.fbp.push(bp)}
     /* 확실한 점부터(뼈 사슬 순서) 따라감. 부모 점이 이번 프레임에 움직인 만큼을 예측에 섞고, 무늬로 찾은 점은 뼈 길이로 확인(stepPt) */
@@ -788,6 +879,8 @@ async function runTrack(){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.abor
       chain.forEach(k=>{const s=st[k],par=parent[k],prev={x:s.trk.pos.x,y:s.trk.pos.y};
         const r=stepPt(s,F,LM,{pm:par?moved[par]:null,bone:par&&boneL[k]?{P:st[par].pos,L:boneL[k],ps:st[par].sc}:null});
         if(r.L)boneL[k]=r.L;s.sc=r.score;s.pos={x:r.x,y:r.y};moved[k]={dx:r.x-prev.x,dy:r.y-prev.y,sc:r.score}});
+      /* 처음 프레임에서 자세 인식이 안 됐던 점은, 무늬로 잘 따라가고 있는 프레임에서 인식되면 그때 이음 */
+      if(LM)keys.forEach(k=>{const s=st[k],ids=poseIdx(k);if(s.lk||!ids||(s.sc||0)<.6)return;const lk=plinkMake(LM,ids,s.pos,lim,vmin);if(lk){s.lk=lk;if(!tr.pose.includes(k))tr.pose.push(k)}});
       /* 돌핀킥 + 배경 빼기: 발목은 실루엣 끝(발끝)에서 */
       if(sil&&st.hip&&(st.hip.sc||0)>=.5){const H=st.hip.pos,q=silTip(F.g,w,h,H.x,H.y,sil.trail,sil.maxD);
         if(q&&q.d>=.45*sil.d0){const ux=(q.x-H.x)/q.d,uy=(q.y-H.y)/q.d,x=q.x+sil.a*ux-sil.b*uy,y=q.y+sil.a*uy+sil.b*ux,s=st.main,T=s.trk,prev={x:T.pos.x,y:T.pos.y};
@@ -800,7 +893,7 @@ async function runTrack(){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.abor
       const roots=keys.slice().sort((a,b)=>tex(b)-tex(a));roots.forEach(k=>{if(!seen.has(k))visit(k)});
       chain.forEach(k=>{if(parent[k]){const a=st[parent[k]].pos,b=st[k].pos;boneL[k]=Math.hypot(a.x-b.x,a.y-b.y)}});
       /* 찍은 점마다 가장 가까운 같은 부위 관절(왼/오른쪽 중)과 잇기(차이는 뼈 방향 기준, plinkMake). 너무 멀면(화면 대각선의 8% 넘게) 잇지 않음 */
-      if(LM){const lim=.08*Math.hypot(w,h);keys.forEach(k=>{const ids=poseIdx(k);if(ids){const lk=plinkMake(LM,ids,st[k].pos,lim);if(lk)st[k].lk=lk}})}
+      if(LM)keys.forEach(k=>{const ids=poseIdx(k);if(ids){const lk=plinkMake(LM,ids,st[k].pos,lim,vmin);if(lk)st[k].lk=lk}});
       tr.pose=keys.filter(k=>st[k].lk);tr.chain=chain.slice();tr.parent=Object.assign({},parent);
       /* 찍은 발목과의 차이를 다리 방향으로 돌려 붙이는 방식은 실제 물속 영상에서 발목 각이 바뀌며 몇 px씩 어긋나 끔 → 발끝 그대로 */
       if(BG&&V.sport==='dolphin'&&keys.includes('hip')){const H=st.hip.pos,A=st.main.pos,L=Math.hypot(A.x-H.x,A.y-H.y),trail=A.x>=H.x?1:-1,q=L>8?silTip(F.g,w,h,H.x,H.y,trail,1.6*L):null;
@@ -810,7 +903,7 @@ async function runTrack(){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.abor
       const d=arr(k);d.x.push(s.pos.x);d.y.push(s.pos.y);d.c.push(c)});
     tr.lm.push(lmPack(LM));init=true;tr.t.push(ts);
     if(i%4===0){V.cur=times[i];V.prog=Math.round((i+1)/times.length*100)+'%';paint();uiState();await new Promise(r=>setTimeout(r,0))}}
-  quantTrack(tr);tr.swaps=keys.reduce((a,k)=>a+(st[k].swaps||0),0);
+  quantTrack(tr);tr.swaps=keys.reduce((a,k)=>a+(st[k].swaps||0),0);tr.poseMiss=ps.n||0;tr.poseFlip=ps.flip||0;tr.poseFar=ps.far||0;tr.poseRot=ps.rot;
   V.busy=false;V.prog='';reanalyze();if(!V.res)toast('추적된 프레임이 너무 적습니다. 구간을 넓혀 다시 시도해 주세요.');
   V.cur=tr.t.length?tr.t[0]:V.t0;await seekTo(V.cur);grab();render()}
 
@@ -827,17 +920,18 @@ async function runFix(){if(V.busy||!V.has||!V.track||!V.fixes.length)return;cons
   const FX={};V.fixes.forEach(f=>{if(!O(f.k))return;(FX[f.k]=FX[f.k]||{})[nearJ(f.t)]={x:f.x,y:f.y}});
   const chain=old.chain||['main'].concat(Object.keys(old.P||{})),parent=old.parent||{},keys=Object.keys(FX).sort((a,b)=>chain.indexOf(a)-chain.indexOf(b));
   keys.forEach(k=>{const o=O(k),c={x:o.x.slice(),y:o.y.slice(),c:o.c.slice()};if(k==='main')Object.assign(tr,c);else tr.P[k]=c});
-  const pl=await loadPose(keys),BG=V.bgsub?await buildBg():null;let lastDet=null;
+  const pl=await loadPose(keys),BG=V.bgsub?await buildBg():null,ps={rot:0,ax:null,fresh:true,gate:Math.max(120,.3*Math.hypot(V.cw,V.ch))},vmin=SPORT[V.sport].vmin;let lastDet=null; /* 고칠 점의 옛 경로가 몸에서 벗어나 있을 수 있어 처음 추적보다 너그럽게 */
+  const refAt=j=>['main'].concat(Object.keys(old.P||{})).filter(k=>poseIdx(k)&&O(k)).map(k=>({ids:poseIdx(k),x:O(k).x[j],y:O(k).y[j]}));
   /* 프레임 j의 화면과 자세 인식(처음 추적 때 기억해 둔 값, 없으면 지금 인식. 바로 앞에 인식한 프레임과 이어지지 않으면 같은 화면을 3번 인식) */
   const frameAt=async j=>{await seekTo(old.t[j]+.0008);grab();let F=toFeat(wctx.getImageData(0,0,w,h).data,w,h);if(BG)F=bgFeat(F,BG.bg);let LM=null;
-    if(pl){if(old.lm[j])LM=lmUnpack(old.lm[j]);else{LM=lastDet!=null&&Math.abs(lastDet-j)===1?poseDetect(pl,.033):poseWarm(pl,3);lastDet=j;old.lm[j]=lmPack(LM)}}return {F,LM}};
+    if(pl){if(old.lm[j])LM=lmUnpack(old.lm[j]);else{if(lastDet==null||Math.abs(lastDet-j)!==1)ps.fresh=true;LM=poseAt(pl,.033,refAt(j),ps);lastDet=j;old.lm[j]=lmPack(LM)}}return {F,LM}};
   const total=keys.reduce((a,k)=>a+Object.keys(FX[k]).length,0);let done=0;
   for(const k of keys){if(V.abort)break;const o=O(k),par=parent[k]&&S(parent[k])?parent[k]:null,P=par?S(par):null,ids=pl?poseIdx(k):null;
     const js=Object.keys(FX[k]).map(Number).sort((a,b)=>a-b),P0=js.map(j=>FX[k][j]),fw=[],bw=[];
     for(let m=0;m<js.length&&!V.abort;m++){const j0=js[m],p0=P0[m];done++;V.prog='고친 점 다시 추적 중 '+done+'/'+total+' ('+ptName(k)+')';V.cur=old.t[j0];uiState();await new Promise(r=>setTimeout(r,0));
       const Ls=[];if(ids)for(const jj of [j0-1,j0+1])if(jj>=0&&jj<n)Ls.push((await frameAt(jj)).LM);
       const f0=await frameAt(j0);paint();let lk=null;
-      if(ids){Ls.push(f0.LM);const Lm=Ls.length===3&&Ls.every(Boolean)?lmMedian(Ls):f0.LM;if(Lm)lk=plinkMake(Lm,ids,p0,lim)}
+      if(ids){Ls.push(f0.LM);const Lm=Ls.length===3&&Ls.every(Boolean)?lmMedian(Ls):f0.LM;if(Lm)lk=plinkMake(Lm,ids,p0,lim,vmin)}
       const pass=async(dir,jEnd,agreeN,tMax)=>{const T=makeTracker(f0.F,p0.x,p0.y,half),s={trk:T,lk:lk?Object.assign({},lk):null},out=[];
         let agree=0,lost=0,lastGood=-1,stop=null,bL=P?Math.hypot(p0.x-P.x[j0],p0.y-P.y[j0]):null;
         for(let j=j0+dir;dir>0?j<=jEnd:j>=jEnd;j+=dir){if(V.abort){stop='abort';break}if(tMax&&Math.abs(old.t[j]-old.t[j0])>tMax){stop='time';break}
@@ -899,10 +993,16 @@ function drawExtras(c,lw){const pr=PRESET[V.preset];if(!pr.pts.length)return;con
     c.beginPath();c.arc(q[0],q[1],lw*2.2,0,7);c.fillStyle='rgba(11,21,25,.55)';c.fill();c.strokeStyle='#ffffff';c.lineWidth=lw*.8;c.stroke();c.beginPath();c.arc(q[0],q[1],lw*.7,0,7);c.fillStyle='#ffffff';c.fill()});
   const r=V.res;if(has&&!live&&r&&r.angles.length===pr.ang.length){const i=Math.max(0,Math.min(r.t.length-1,Math.round(realT()*r.fs)));
     r.angles.forEach((a,j)=>{const v=pos[pr.ang[j].pts[1]];if(!v)return;const txt=Math.round(a.a[i])+'°';c.font='700 '+Math.round(lw*5.5)+'px sans-serif';const tw=c.measureText(txt).width,bx=Math.max(4,v[0]-tw-lw*5),by=v[1]+lw*2;c.fillStyle='rgba(11,21,25,.8)';c.fillRect(bx-5,by-lw*5.6,tw+10,lw*7.4);c.fillStyle='#ffffff';c.fillText(txt,bx,by)})}}
+/* 스트림라인 자세: 찍은 프레임에서만 보임. 노란 점선 = 손끝–발목 기준선, 하늘색 = 손끝–어깨–골반–무릎–발목 */
+function drawSlPose(c,lw){const pz=V.man.pose;if(!pz||!pz.P||Math.abs(V.cur-pz.t)>halfFrame()+1e-6)return;const P=pz.P;
+  if(P.hand&&P.ankle){c.setLineDash([lw*2.5,lw*2]);c.strokeStyle='rgba(11,21,25,.85)';c.lineWidth=lw*1.4;c.beginPath();c.moveTo(P.hand[0],P.hand[1]);c.lineTo(P.ankle[0],P.ankle[1]);c.stroke();c.strokeStyle='#ffd43b';c.lineWidth=lw*.6;c.stroke();c.setLineDash([])}
+  const ch=['hand','shoulder','hip','knee','ankle'].filter(k=>P[k]);for(let pass=0;pass<2;pass++){c.beginPath();ch.forEach((k,i)=>{const q=P[k];if(i)c.lineTo(q[0],q[1]);else c.moveTo(q[0],q[1])});c.strokeStyle=pass?'#7cc6ff':'rgba(11,21,25,.85)';c.lineWidth=pass?lw*.8:lw*1.8;c.stroke()}
+  SLK.forEach(([k,n])=>{const q=P[k];if(!q)return;c.beginPath();c.arc(q[0],q[1],lw*1.5,0,7);c.fillStyle='#7cc6ff';c.fill();c.strokeStyle='#0b1519';c.lineWidth=lw*.5;c.stroke();
+    if(V.mode==='slpose'||!V.has){c.font='700 '+Math.round(lw*3.8)+'px sans-serif';c.fillStyle='#7cc6ff';c.fillText(n,q[0]-lw*3,q[1]+(k==='ear'||k==='hip'?-lw*3:lw*6))}})}
 const realT=()=>V.track&&V.track.t.length?(V.cur-V.track.t[0])/V.slow:0;
-function resAt(){const r=V.res;if(!r)return null;const i=Math.max(0,Math.min(r.t.length-1,Math.round(realT()*r.fs)));return {i,vy:r.vy[i],sp:r.sp[i],Y:r.Y[i],P:r.P?r.P[i]:null}}
+function resAt(){const r=V.res;if(!r)return null;const i=Math.max(0,Math.min(r.t.length-1,Math.round(realT()*r.fs)));return {i,vy:r.vy[i],vx:r.vx[i],sp:r.sp[i],Y:r.Y[i],P:r.P?r.P[i]:null}}
 function paint(){const cv=$('#cv');if(!cv)return;const c=cv.getContext('2d');
-  if(V.has&&wctx)c.drawImage(wk,0,0);else{const g=c.createLinearGradient(0,0,0,V.ch);g.addColorStop(0,'#1b1e23');g.addColorStop(1,'#0f1114');c.fillStyle=g;c.fillRect(0,0,V.cw,V.ch);c.fillStyle='#24282e';c.fillRect(0,662,V.cw,58);c.fillStyle='rgba(255,255,255,.75)';c.font='600 20px sans-serif';c.fillText('예시 궤적 · '+SPORT[V.sport].n,18,36)}
+  if(V.has&&wctx)c.drawImage(wk,0,0);else{const g=c.createLinearGradient(0,0,0,V.ch);g.addColorStop(0,'#1b1e23');g.addColorStop(1,'#0f1114');c.fillStyle=g;c.fillRect(0,0,V.cw,V.ch);if(V.ch>V.cw){c.fillStyle='#24282e';c.fillRect(0,662,V.cw,58)}c.fillStyle='rgba(255,255,255,.75)';c.font='600 20px sans-serif';c.fillText('예시 궤적 · '+SPORT[V.sport].n,18,36)}
   const lw=Math.max(2.5,V.cw/150);c.lineCap='round';c.lineJoin='round';
   const cal=V.cal,ca=cal.a,cb=V.mode==='calB'&&V.tmp?V.tmp:cal.b;
   if(ca){c.strokeStyle='#ffd43b';c.fillStyle='#ffd43b';c.lineWidth=lw*.8;if(cb){c.setLineDash([lw*2.5,lw*2]);c.beginPath();c.moveTo(ca[0],ca[1]);c.lineTo(cb[0],cb[1]);c.stroke();c.setLineDash([]);c.beginPath();c.arc(cb[0],cb[1],lw*1.4,0,7);c.fill()}c.beginPath();c.arc(ca[0],ca[1],lw*1.4,0,7);c.fill();
@@ -917,9 +1017,10 @@ function paint(){const cv=$('#cv');if(!cv)return;const c=cv.getContext('2d');
       if(pass===0){c.strokeStyle='rgba(11,21,25,.85)';c.lineWidth=lw*1.9}else{c.strokeStyle=lowc?'#b8c4c8':(up?'#4ade80':'#ffa94d');c.lineWidth=lw}c.stroke()}
       if(!live&&end<tr.t.length-1){c.beginPath();c.moveTo(tr.x[end],tr.y[end]);c.lineTo(cur.x,cur.y);c.strokeStyle=pass?'#4ade80':'rgba(11,21,25,.85)';c.lineWidth=pass?lw:lw*1.9;c.stroke()}}
     const p=live?{x:tr.x[end],y:tr.y[end]}:cur;if(live)box([p.x,p.y],'#ffd43b');c.fillStyle='#fff';c.strokeStyle='#0b1519';c.lineWidth=lw*.8;c.beginPath();c.arc(p.x,p.y,lw*2,0,7);c.fill();c.stroke();
-    const ra=!live&&resAt();if(ra){const txt=(ra.vy>=0?'↑ ':'↓ ')+Math.abs(ra.vy).toFixed(2)+' m/s';c.font='700 '+Math.round(lw*5.5)+'px sans-serif';const tw=c.measureText(txt).width,bx=Math.min(V.cw-tw-14,Math.max(4,p.x+lw*4)),by=Math.max(lw*8,p.y-lw*4);c.fillStyle='rgba(11,21,25,.8)';c.fillRect(bx-5,by-lw*5.6,tw+10,lw*7.4);c.fillStyle=ra.vy>=0?'#4ade80':'#ffa94d';c.fillText(txt,bx,by)}}
+    const ra=!live&&resAt();if(ra){const gl=V.sport==='streamline',txt=gl?'→ '+Math.abs(ra.vx).toFixed(2)+' m/s':(ra.vy>=0?'↑ ':'↓ ')+Math.abs(ra.vy).toFixed(2)+' m/s';c.font='700 '+Math.round(lw*5.5)+'px sans-serif';const tw=c.measureText(txt).width,bx=Math.min(V.cw-tw-14,Math.max(4,p.x+lw*4)),by=gl?Math.min(V.ch-lw*3,p.y+lw*11):Math.max(lw*8,p.y-lw*4);c.fillStyle='rgba(11,21,25,.8)';c.fillRect(bx-5,by-lw*5.6,tw+10,lw*7.4);c.fillStyle=gl?'#7cc6ff':ra.vy>=0?'#4ade80':'#ffa94d';c.fillText(txt,bx,by)}}
   else if(V.target&&!(tg&&V.mode==='target'&&V.tIdx===0))box(V.target,'#ffd43b');
   drawExtras(c,lw);
+  if(V.sport==='streamline')drawSlPose(c,lw);
   /* 고칠 위치(아직 반영 전): 분홍 ◆, 지금 추적 위치와 점선으로 이음. 고치기 중이면 고칠 점에 노란 고리 */
   if(V.has&&V.fixes.length){const hf=halfFrame();V.fixes.forEach(f=>{if(Math.abs(f.t-V.cur)>hf)return;const q=trackAt(f.t,f.k),r=lw*2.6;
     if(q){c.setLineDash([lw*1.5,lw*1.5]);c.strokeStyle='#ff6ad5';c.lineWidth=lw*.6;c.beginPath();c.moveTo(q.x,q.y);c.lineTo(f.x,f.y);c.stroke();c.setLineDash([])}
@@ -954,6 +1055,8 @@ function bindStage(){const st=$('#stage');if(!st)return;let down=false;
   const up=()=>{if(!down)return;down=false;$('#loupe').style.display='none';const p=V.tmp.map(v=>Math.round(v*10)/10);V.tmp=null;
     if(V.mode==='calA'){remember('기준 길이 첫 점');V.cal.a=p;V.cal.b=null;V.mode='calB'}
     else if(V.mode==='calB'){if(Math.hypot(p[0]-V.cal.a[0],p[1]-V.cal.a[1])<8){toast('두 점이 너무 가깝습니다. 반대쪽 끝을 다시 눌러 주세요.');paint();return}remember('기준 길이 끝점');V.cal.b=p;V.mode=null;reanalyze()}
+    else if(V.mode==='slpose'){const [k,n]=SLK[V.slIdx]||SLK[0];remember('자세 '+n+' 찍기');const o=V.man.pose&&Math.abs(V.man.pose.t-V.cur)<=halfFrame()+1e-6?V.man.pose:{t:V.cur,P:{}};
+      V.man=Object.assign({},V.man,{pose:{t:o.t,P:Object.assign({},o.P,{[k]:p})}});const nx=SLK.findIndex(q=>!V.man.pose.P[q[0]]);if(nx>=0)V.slIdx=nx;else V.mode=null;reanalyze()}
     else if(V.mode==='bo'){remember('브레이크아웃 위치');V.man.bo={t:V.cur,x:p[0],y:p[1]};V.mode=null;reanalyze()}
     else if(V.mode==='bar'){remember(V.sport==='start'?'수면 높이':'바 높이');V.bar=p;V.mode=null;reanalyze()}
     else if(V.mode==='target'){const k=ptList()[V.tIdx][0];remember(ptName(k)+(ptPos(k)?' 위치 변경':' 찍기'));if(k==='main')V.target=p;else V.extra[k]=p;V.track=null;V.res=null;const nx=ptList().findIndex(q=>!ptPos(q[0]));if(nx>=0)V.tIdx=nx;else V.mode=null}
@@ -963,7 +1066,7 @@ function bindStage(){const st=$('#stage');if(!st)return;let down=false;
 
 /* ----- 그래프 ----- */
 const CH={L:40,R:12,W:380,tmax:0};
-const CDEF={vy:['수직 속도','m/s'],sp:['속력(방향 무관)','m/s'],Y:['높이','m'],P:['바벨에 전달된 파워','W'],ang:['관절 각도','°']};
+const CDEF={vx:['수평 속도','m/s'],vy:['수직 속도','m/s'],sp:['속력(방향 무관)','m/s'],Y:['높이','m'],P:['바벨에 전달된 파워','W'],ang:['관절 각도','°']};
 const COL=['var(--accent)','var(--down)','var(--up)'];
 function chartSVG(series,unit,cursor,marks){const W=380,H=220,L=CH.L,R=CH.R,T=14,B=30;let lo=0,hi=0,tmax=0;series.forEach(s=>{s.v.forEach(v=>{if(v<lo)lo=v;if(v>hi)hi=v});tmax=Math.max(tmax,s.t[s.t.length-1])});
   if(hi-lo<1e-6)hi=lo+1;const pad=(hi-lo)*.1;hi+=pad;if(lo<0)lo-=pad;if(cursor)CH.tmax=tmax;
@@ -1055,11 +1158,33 @@ function dolphinHTML(R){if(!R||R.n<2)return '<div class="banner warn">킥을 2�
     R.kicks.map((k,i)=>'<tr><td class="num">'+(i+1)+(k.amp<.7*mA?' <span class="pill w">작음</span>':'')+'</td><td class="v">'+f2(k.t)+'초</td><td class="v">'+(k.T==null?'–':f2(k.T)+'초')+'</td><td class="v">'+f0(k.amp*100)+'cm</td><td class="v">'+f2(k.vDown)+'</td><td class="v">'+(k.v==null?'–':f2(k.v))+'</td><td class="v">'+(k.dist==null?'–':f2(k.dist)+'m')+'</td>'+(hk?'<td class="v">'+(k.knee==null?'–':f0(k.knee)+'°')+'</td>':'')+'</tr>').join('')+'</table></div>';
   h+='<p class="small muted">킥 한 번은 업킥 끝(발목이 가장 높을 때) → 다운킥 → 다음 업킥 끝까지입니다. 영상 처음과 끝에 걸쳐 잘린 킥은 주기를 재지 않습니다. 진폭이 중앙값의 70% 미만이면 작음으로 표시합니다. 속도 단위는 m/s입니다. 진폭과 속도는 기준 길이가 선수와 같은 거리에 있을 때 맞습니다. 물 밖에서 수면 아래를 찍으면 굴절 때문에 진폭이 작게 보이므로, 수중 카메라(방수 케이스) 영상을 권합니다.</p>';
   return h}
+function glideHTML(R){if(!R)return '<div class="banner warn">분석할 구간이 너무 짧습니다.</div>';
+  if(R.short)return '<div class="banner warn">감속을 맞출 글라이드 구간이 너무 짧습니다('+f2(R.tB-R.tA)+'초). 골반이 화면에 들어온 뒤 0.5초 이상 미끄러지는 구간이 필요합니다. 아래 <b>글라이드 구간 지정</b>으로 직접 잡을 수도 있습니다.</div>';let h='';
+  if(R.r2!=null&&R.r2<.8)h+='<div class="banner warn">속도 변화가 2차 항력 모형과 잘 맞지 않습니다(R² '+f2(R.r2)+'). 킥·팔 동작이 섞였거나 골반 추적이 흔들렸을 수 있습니다'+(V.tmode==='pose'?'(스트림라인은 프레임마다 관절 위치가 몇 px씩 흔들리는 AI보다 수영복 무늬를 따라가는 <b>무늬만 따라가기</b>가 속도가 고릅니다)':'')+'. 감속 계수·절반 속도 거리는 참고만 하고, 글라이드 구간을 직접 지정해 보세요.</div>';
+  if(R.T<.6)h+='<div class="banner warn">글라이드 구간이 '+f2(R.T)+'초로 짧아 감속 계수가 흔들릴 수 있습니다. 1초 이상이면 더 믿을 만합니다.</div>';
+  h+='<div class="tiles">'+tile('시작 속도',f2(R.vA),'m/s',f2(R.tA)+'초')+tile('끝 속도',f2(R.vB),'m/s',f2(R.tB)+'초')+tile('속도 감소',f0(R.loss),'%',f2(R.T)+'초 · '+f2(R.dist)+'m 동안')+
+    tile('감속 계수 k',R.k.toFixed(3),'1/m','작을수록 덜 감속 · 모형 일치 R² '+f2(R.r2))+tile('절반 속도 거리',R.halfD==null?'–':f1(R.halfD),'m','이 감속이 이어지면 속도가 절반이 되는 거리')+
+    tile('평균 감속',f2(R.decel),'m/s²','')+tile('깊이 변화',(R.dY>=0?'+':'')+f0(R.dY*100),'cm',R.dY>=0?'골반이 떠오름':'골반이 가라앉음')+'</div>';
+  h+='<p class="small muted">물의 저항을 속도의 제곱에 비례한다고 보면(2차 항력) 1/속도가 시간에 따라 직선으로 늘고, 그 기울기가 감속 계수 k입니다. 같은 사람이 같은 기준 길이로 찍었다면 k가 작을수록(절반 속도 거리가 길수록) 저항이 작은 스트림라인입니다. 속도 감소율(%)은 시작 속도와 구간 길이에 따라 달라지므로 날짜끼리는 k를 비교하세요. 수면 가까이에서는 물결 저항이 더해져 k가 커지니 같은 깊이로 비교해야 합니다. 시작 속도는 화면에 들어온 뒤 값이라 벽을 민 직후 최고 속도보다 낮습니다.</p>';
+  return h}
+function slPoseHTML(R,demo){const pz=V.man.pose,cnt=pz&&pz.P?SLK.filter(q=>pz.P[q[0]]).length:0,S=R&&R.pose,on=V.mode==='slpose';let h='<h3>스트림라인 자세 (한 프레임)</h3>';
+  if(S){const cm=v=>v==null?'':' · '+(v>=0?'+':'')+f1(v*100)+'cm',pc=v=>(v>=0?'+':'')+f1(v*100)+'%',WD={shoulder:['어깨가 들려 있습니다','어깨가 처져 있습니다'],hip:['엉덩이가 들려 있습니다(골반이 굽음)','골반이 처져 있습니다(허리가 젖혀짐)'],knee:['무릎이 들려 있습니다','무릎이 처져 있습니다']},w=S.worst;
+    h+='<div class="tiles">'+tile('일직선 편차',f1(S.rms*100),'%','어깨·골반·무릎, 몸 길이 대비 RMS'+(S.rmsM!=null?' · '+f1(S.rmsM*100)+'cm':''))+tile('몸 기울기',(S.tilt>=0?'+':'')+f1(S.tilt),'°','손끝–발목 선, 앞이 높으면 +')+
+      tile('어깨 각',f0(S.ang.sh),'°','골반–어깨–손끝')+tile('골반 각',f0(S.ang.hip),'°','어깨–골반–무릎')+tile('무릎 각',f0(S.ang.knee),'°','골반–무릎–발목')+(S.len!=null?tile('손끝–발목 길이',f2(S.len),'m','기준 길이와 비교해 찍은 점 확인'):'')+'</div>';
+    h+='<div class="tscroll"><table class="mt"><tr><th>점</th><th class="v">기준선에서</th><th>방향</th></tr>'+['ear','shoulder','hip','knee'].filter(k=>S.rel[k]!=null).map(k=>'<tr><td><b>'+SLK.find(q=>q[0]===k)[1]+'</b>'+(k===w?' <span class="pill w">가장 큼</span>':'')+'</td><td class="v">'+pc(S.rel[k])+cm(S.dev[k])+'</td><td class="small">'+(S.rel[k]>=0?'위(수면 쪽)':'아래(바닥 쪽)')+(k==='ear'?' · 참고':'')+'</td></tr>').join('')+'</table></div>';
+    h+='<p class="small">가장 많이 벗어난 곳은 <b>'+SLK.find(q=>q[0]===w)[1]+'</b>입니다(몸 길이의 '+f1(Math.abs(S.rel[w])*100)+'%'+(S.dev[w]!=null?', '+f1(Math.abs(S.dev[w])*100)+'cm':'')+'). '+WD[w][S.rel[w]>=0?0:1]+'.</p>'+
+      '<p class="small muted">손끝과 발목을 잇는 선(노란 점선)을 기준으로 머리·어깨·골반·무릎이 위아래로 벗어난 거리입니다. 어깨·골반·무릎 값이 0에 가깝고 세 각도가 180°에 가까울수록 일직선입니다. 머리(귀)는 모은 팔 아래에 있어 좋은 자세에서도 기준선보다 아래로 나오므로 일직선 편차에 넣지 않고, 날짜끼리 비교해 위로 올라가면 머리를 든 것으로 봅니다. 판정 기준은 정하지 않았으니 같은 조건에서 찍은 내 기록끼리 비교하세요. 한 프레임 값이라 찍은 점 위치에 따라 1~2% 달라질 수 있습니다.'+(pz&&pz.ai?' AI가 찾은 점이라 관절 중심에서 벗어났을 수 있습니다. 확인 후 어긋난 점은 다시 찍으세요.':'')+'</p>'}
+  else if(!demo)h+='<p class="small muted">몸 전체가 화면에 들어와 팔·다리를 모두 모은 프레임으로 옮긴 뒤 자세 점 6개(손끝·머리·어깨·골반·무릎·발목)를 찍으면, 몸이 일직선에서 벗어난 정도를 잽니다'+(cnt?' (지금 '+cnt+'/6)':'')+'.</p>';
+  if(demo)return h;
+  h+='<div class="row"><button class="btn sm'+(on?' on':'')+'" type="button" id="slBtn">'+(on?'자세 찍기 멈추기':cnt?'현재 프레임에서 새로 찍기':'현재 프레임에서 자세 점 찍기')+'</button><button class="btn sm" type="button" id="slAI">AI로 자세 점 찾기</button>'+(pz?'<button class="btn sm" type="button" id="slGo">자세 프레임으로 ('+f2(pz.t)+'초)</button><button class="btn sm" type="button" id="slDel">자세 점 지우기</button>':'')+'</div>';
+  if(pz)h+='<div class="chips">'+SLK.map((q,i)=>'<button type="button" class="chip'+(pz.P[q[0]]?' done':'')+(on&&V.slIdx===i?' cur':'')+'" data-slp="'+i+'">'+q[1]+(pz.P[q[0]]?' ✓':'')+'</button>').join('')+'</div><p class="small muted">이름을 누르면 그 점만 다시 찍습니다(자세 프레임으로 자동 이동). AI 찾기는 GitHub Pages 주소에서만 됩니다.</p>';
+  return h}
 function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has,R=V.rep,sp=V.sport;let h='<div class="card" id="results"><div class="row"><h2>결과</h2>'+(demo?'<span class="pill n">예시</span>':'')+'</div>';
   if(!demo&&s.conf!=null){if(s.low>0)h+='<div class="banner warn">추적이 불확실한 구간이 있습니다(전체의 '+Math.round(s.low/r.conf.length*100)+'%). 영상 위 회색 선이 그 구간입니다. 그 시점으로 옮긴 뒤 아래 <b>위치 고치기</b>를 쓰세요.</div>'}
   let marks=r.phases;
   if(sp==='pullup')h+=pullHTML(R);
   else if(sp==='start'){h+=startHTML(R);if(R){marks=[];if(R.sig!=null&&R.dep!=null)marks.push({t0:R.sig,t1:R.dep,dir:-1});if(R.dep!=null&&R.ent!=null)marks.push({t0:R.dep,t1:R.ent,dir:0});if(R.ent!=null&&R.bo)marks.push({t0:R.ent,t1:R.bo.t,dir:1})}}
+  else if(sp==='streamline'){h+=glideHTML(R);marks=R&&!R.short?[{t0:R.tA,t1:R.tB,dir:0}]:[]}
   else if(sp==='dolphin'){h+=dolphinHTML(R);if(R)marks=R.kicks.map(k=>({t0:k.t,t1:k.tLow,dir:-1})).concat(R.kicks.filter(k=>k.tEnd!=null).map(k=>({t0:k.tLow,t1:k.tEnd,dir:1})))}
   else if(sp==='cmj'){h+=cmjHTML(R);if(R)marks=[{t0:R.tOn,t1:R.tLow,dir:-1},{t0:R.tLow,t1:R.tLow+R.con,dir:1}].concat(R.to!=null&&R.ld!=null?[{t0:R.to,t1:R.ld,dir:0}]:[])}
   else{  h+='<div class="tiles"><div class="tile"><div class="small muted">최고 상승 속도</div><div class="v">'+f2(s.vPeak)+' <small>m/s</small></div><div class="small muted">'+f2(s.tPeak)+'초 시점</div></div>'+
@@ -1068,13 +1193,15 @@ function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has,R
    '<div class="tile"><div class="small muted">앞뒤 이동 폭</div><div class="v">'+f1(s.xr*100)+' <small>cm</small></div><div class="small muted">궤적의 좌우 범위</div></div>'+
    (s.pPeak!=null?'<div class="tile"><div class="small muted">최대 파워</div><div class="v">'+f0(s.pPeak)+' <small>W</small></div><div class="small muted">무게×(중력+가속)×속도</div></div><div class="tile"><div class="small muted">간이 파워</div><div class="v">'+f0(s.pSimple)+' <small>W</small></div><div class="small muted">무게×중력×최고 속도</div></div>':'')+'</div>';
 }
-  const key=(V.chart==='P'&&!r.P)||(V.chart==='ang'&&!r.angles.length)?'vy':V.chart,def=CDEF[key];let pk=null;if(key==='vy'||key==='sp'||key==='P'){pk=0;const a=r[key];for(let i=0;i<a.length;i++)if(a[i]>a[pk])pk=i}
-  h+='<div class="row"><h3>시간에 따른 변화</h3><div class="field" style="max-width:210px;margin-left:auto"><label for="chartSel">그래프</label><select id="chartSel">'+Object.keys(CDEF).filter(k=>(k!=='P'||r.P)&&(k!=='ang'||r.angles.length)).map(k=>'<option value="'+k+'"'+(k===key?' selected':'')+'>'+CDEF[k][0]+'</option>').join('')+'</select></div></div>'+
-   chartSVG(key==='ang'?r.angles.map((a,j)=>({t:r.t,v:a.a,color:COL[j],dash:j?'6 4':null})):[{t:r.t,v:r[key],color:'var(--accent)',peak:pk}],def[1],true,marks)+(key==='ang'?'<div class="row small">'+r.angles.map((a,j)=>'<span><svg width="26" height="8" style="vertical-align:middle"><line x1="0" x2="26" y1="4" y2="4" stroke="'+COL[j]+'" stroke-width="2.4"'+(j?' stroke-dasharray="6 4"':'')+'/></svg> '+a.n+'</span>').join('')+'</div>':'')+'<p class="small muted">'+(V.sport==='cmj'?'주황은 반동(내려감), 초록은 추진, 파랑은 체공 구간입니다.':V.sport==='start'?'주황은 블록(신호→이탈), 파랑은 비행, 초록은 수중(입수→브레이크아웃) 구간입니다.':V.sport==='dolphin'?'주황은 다운킥, 초록은 업킥 구간입니다(주 추적점 = 발목).':'옅은 초록은 상승 구간, 주황은 하강 구간입니다.')+' 점선은 영상의 현재 시점입니다.</p>';
+  const key=(V.chart==='P'&&!r.P)||(V.chart==='ang'&&!r.angles.length)||(V.chart==='vx'&&!SPORT[sp].swim)?'vy':V.chart,def=CDEF[key];let pk=null;if(key==='vy'||key==='sp'||key==='P'||(key==='vx'&&sp!=='streamline')){pk=0;const a=r[key];for(let i=0;i<a.length;i++)if(a[i]>a[pk])pk=i}
+  h+='<div class="row"><h3>시간에 따른 변화</h3><div class="field" style="max-width:210px;margin-left:auto"><label for="chartSel">그래프</label><select id="chartSel">'+Object.keys(CDEF).filter(k=>(k!=='P'||r.P)&&(k!=='ang'||r.angles.length)&&(k!=='vx'||SPORT[sp].swim)).map(k=>'<option value="'+k+'"'+(k===key?' selected':'')+'>'+CDEF[k][0]+'</option>').join('')+'</select></div></div>'+
+   chartSVG(key==='ang'?r.angles.map((a,j)=>({t:r.t,v:a.a,color:COL[j],dash:j?'6 4':null})):[{t:r.t,v:key==='vx'&&R&&R.dir?r.vx.map(v=>v*R.dir):r[key],color:'var(--accent)',peak:pk}].concat(key==='vx'&&sp==='streamline'&&R&&R.fit?[{t:R.fit.t,v:R.fit.v,color:COL[1],dash:'6 4'}]:[]),def[1],true,marks)+(key==='ang'?'<div class="row small">'+r.angles.map((a,j)=>'<span><svg width="26" height="8" style="vertical-align:middle"><line x1="0" x2="26" y1="4" y2="4" stroke="'+COL[j]+'" stroke-width="2.4"'+(j?' stroke-dasharray="6 4"':'')+'/></svg> '+a.n+'</span>').join('')+'</div>':'')+'<p class="small muted">'+(V.sport==='cmj'?'주황은 반동(내려감), 초록은 추진, 파랑은 체공 구간입니다.':V.sport==='start'?'주황은 블록(신호→이탈), 파랑은 비행, 초록은 수중(입수→브레이크아웃) 구간입니다.':V.sport==='dolphin'?'주황은 다운킥, 초록은 업킥 구간입니다(주 추적점 = 발목).':V.sport==='streamline'?'파란 구간이 감속을 맞춘 글라이드 구간이고, 점선은 2차 항력 모형으로 맞춘 속도입니다(수평 속도 = 골반, 진행 방향 +).':'옅은 초록은 상승 구간, 주황은 하강 구간입니다.')+' 점선은 영상의 현재 시점입니다.</p>';
   if(sp==='start'&&r.angles.length)h+=startAngHTML(r,R);
   if(sp!=='pullup'&&sp!=='start'){
   if(r.angles.length){const lowA=r.angles.reduce((m,a)=>Math.max(m,a.low),0);h+='<h3>관절 각도</h3><div class="tscroll"><table class="mt"><tr><th>각도</th><th class="v">최소</th><th class="v">최대</th><th class="v">최고 속도 시점</th></tr>'+r.angles.map(a=>'<tr><td><b>'+a.n+'</b></td><td class="v">'+f0(a.min)+'° <span class="muted">('+f2(a.tMin)+'초)</span></td><td class="v">'+f0(a.max)+'°</td><td class="v">'+f0(a.atPeak)+'°</td></tr>').join('')+'</table></div><p class="small muted">세 점이 이루는 가운데 점의 각입니다. 완전히 펴면 180°에 가깝습니다. 찍은 점이 관절 중심에서 벗어난 만큼 값이 달라지므로, 절대값보다 같은 방식으로 찍은 기록 사이의 차이를 보세요.'+(lowA?' 각도용 점의 추적이 불확실한 구간이 있습니다(최대 '+Math.round(lowA/r.t.length*100)+'%).':'')+'</p>'}
   }
+  if(sp==='streamline'){h+=slPoseHTML(R,demo);
+    if(!demo&&R)h+='<h3>글라이드 구간 지정</h3><p class="small">현재 <b class="num">'+f2(R.tA)+' – '+f2(R.tB)+'</b>초 <span class="pill n">'+(R.src==='manual'?'직접 지정':R.src==='all'?'자동(전체 구간)':'자동')+'</span></p><div class="row"><button class="btn sm" type="button" id="gA">현재 프레임을 글라이드 시작으로</button><button class="btn sm" type="button" id="gB">현재 프레임을 글라이드 끝으로</button>'+(V.man.gA!=null||V.man.gB!=null?'<button class="btn sm" type="button" id="gReset">자동으로 되돌리기</button>':'')+'</div><p class="small muted">자동으로는 가장 빠른 시점부터 다시 빨라지기 직전(첫 킥·팔 동작)까지 잡습니다. 시각은 분석 구간 시작에서 잰 초입니다. 첫 킥 준비로 무릎을 굽히기 시작한 프레임을 끝으로 지정하면 더 정확합니다.</p>'}
   if(sp==='start')h+='<h3>머리 궤적</h3>'+pathSVG(r)+'<p class="small muted">○ 시작, ■ 끝. 가로와 세로는 같은 축척입니다.</p>';
   if(sp==='free'){
   if(r.reps.length>1){const mx=Math.max.apply(null,r.reps.map(p=>p.mean));h+='<h3>반복별 속도</h3><div class="tscroll"><table class="mt"><tr><th>반복</th><th class="v">평균</th><th class="v">최고</th><th style="width:38%"></th></tr>'+r.reps.map((p,i)=>'<tr><td class="num">'+(i+1)+'</td><td class="v">'+f2(p.mean)+'</td><td class="v">'+f2(p.peak)+'</td><td><div class="bar" style="width:'+Math.round(p.mean/mx*100)+'%"></div></td></tr>').join('')+'</table></div><p class="small muted">가장 큰 상승의 80% 이상 올라간 구간을 한 번의 반복으로 셉니다. 가장 빠른 반복 대비 마지막 반복의 평균 속도 저하는 <b>'+f1(s.loss)+'%</b>입니다.</p>'}
@@ -1096,8 +1223,17 @@ function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has,R
       (fl?'<p class="small muted">이 분석에 반영한 고침: '+fl+'곳.</p>':'');
     h+='<div class="row"><button class="btn primary" type="button" id="saveBtn"'+(nf?' disabled':'')+'>'+(S.editRec?'고친 내용 저장':'기록 저장')+'</button>'+(S.editRec?'<button class="btn" type="button" id="saveNewBtn"'+(nf?' disabled':'')+'>새 기록으로 저장</button>':'')+(nf?'<span class="small muted">고친 점을 반영한 뒤 저장할 수 있습니다.</span>':'')+'</div>'}
   return h+'</div>'}
+/* 현재 프레임에서 자세 인식으로 스트림라인 자세 점 찾기. 누운 몸은 머리·발을 뒤집어 찾기도 해서, 진행 방향과 맞을 때까지 화면을 90°씩 돌려 다시 찾음 */
+async function slPoseAI(){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.prog='(자세 인식 모델 준비 중)';uiState();let pl=null;try{pl=await poseLoader()}catch(e){}
+  if(!pl){V.busy=false;V.prog='';render();toast('자세 인식 모델을 받지 못했습니다. GitHub Pages 주소에서만 됩니다. 직접 찍어 주세요.');return}
+  grab();const tr=V.track,dir=V.rep&&V.rep.dir?V.rep.dir:tr&&tr.x.length>1?(tr.x[tr.x.length-1]>=tr.x[0]?1:-1):0;let P=null;
+  try{for(const rot of [0,1,3,2]){poseDetect(pl,.033,-1);poseDetect(pl,.033,-1);P=slFromLM(poseWarm(pl,3,rot),dir);if(P)break}}catch(e){P=null}
+  V.busy=false;V.prog='';if(!P){render();toast('이 프레임에서 몸을 찾지 못했습니다. 몸 전체가 보이는 프레임에서 다시 하거나 직접 찍어 주세요.');return}
+  remember('AI 자세 점');V.man=Object.assign({},V.man,{pose:{t:V.cur,P,ai:true}});V.mode=null;reanalyze();render();toast('AI가 찾은 자세 점입니다'+(P.ear?'':'(머리는 못 찾음)')+'. 손끝은 손가락 마디 쪽에 찍히는 일이 많으니 확인하고, 어긋난 점은 이름을 눌러 다시 찍으세요.')}
+/* 결과 아래 버튼으로 영상 위에 찍는 모드를 켰을 때 영상이 보이게 올림(휴대폰은 결과가 영상 아래 멀리 있음) */
+function toStage(){const st=$('#stage');if(!st)return;const b=st.getBoundingClientRect();if(b.top<0||b.bottom>window.innerHeight)try{st.scrollIntoView({block:'center'})}catch(e){}}
 function guideText(){if(V.busy)return '추적 중입니다 '+V.prog;if(!V.has)return '예시 궤적입니다. 재생하거나 막대를 움직여 보세요. 내 영상을 선택하면 바뀝니다.';
-  return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:V.sport==='start'?'<b>수면</b>(물 표면이 닿는 높이, 레인로프가 떠 있는 선)을 누르세요. 머리가 이 선 아래로 내려간 순간을 입수로 봅니다.':'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',bo:'브레이크아웃 순간(머리가 수면 위로 처음 보이는 프레임)에서 <b>머리 위치</b>를 누르세요. 그 시각과 출발벽에서의 거리를 기록합니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(phint(ptList()[V.tIdx][0])||'관절 중심을 찍습니다.'))+' 누른 채 움직이면 확대경이 나옵니다.',fix:'고칠 점: <b>'+esc(ptName(V.fixK))+'</b>(노란 고리). 올바른 자리를 누르거나, 다른 점을 끌면 그 점을 고칩니다. 고친 곳은 분홍 ◆로 남고, 다 고친 뒤 결과 아래 <b>반영</b>을 누르세요.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
+  return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:V.sport==='start'?'<b>수면</b>(물 표면이 닿는 높이, 레인로프가 떠 있는 선)을 누르세요. 머리가 이 선 아래로 내려간 순간을 입수로 봅니다.':'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',bo:'브레이크아웃 순간(머리가 수면 위로 처음 보이는 프레임)에서 <b>머리 위치</b>를 누르세요. 그 시각과 출발벽에서의 거리를 기록합니다.',slpose:'자세 점: <b>'+(SLK[V.slIdx]||SLK[0])[1]+'</b>를 누르세요 ('+((V.slIdx|0)+1)+'/'+SLK.length+'). '+SLH[(SLK[V.slIdx]||SLK[0])[0]]+'. 카메라 쪽 팔·다리를 찍고, 누른 채 움직이면 확대경이 나옵니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(phint(ptList()[V.tIdx][0])||'관절 중심을 찍습니다.'))+' 누른 채 움직이면 확대경이 나옵니다.',fix:'고칠 점: <b>'+esc(ptName(V.fixK))+'</b>(노란 고리). 올바른 자리를 누르거나, 다른 점을 끌면 그 점을 고칩니다. 고친 곳은 분홍 ◆로 남고, 다 고친 뒤 결과 아래 <b>반영</b>을 누르세요.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
 /* 기록 고치기: 분석 설정(점·구간·기준 길이·수면/바·직접 지정 시점)을 기록에 함께 저장해 두고, 같은 영상을 다시 고르면 불러옴 */
 const cpo=o=>o==null?o:JSON.parse(JSON.stringify(o));
 function setupOf(){return {bgsub:V.bgsub,tmode:V.tmode,sport:V.sport,preset:V.preset,rate:V.rate,slow:V.slow,half:V.half,t0:V.t0,t1:V.t1,cal:cpo(V.cal),bar:cpo(V.bar),target:cpo(V.target),extra:cpo(V.extra),man:cpo(V.man),cw:V.cw,ch:V.ch,vname:V.vname||'',vdur:Math.round(V.dur*1000)/1000}}
@@ -1106,17 +1242,20 @@ function recMetrics(){const r=V.res,R=V.rep,rd=v=>v==null||!isFinite(v)?null:Mat
   if(V.sport==='pullup'&&R&&R.sum)o.pu=Object.assign({},R.sum,{reps:R.reps.map(q=>({rom:rd(q.rom),T:rd(q.T),mean:rd(q.mean),peak:rd(q.peak)}))});
   if(V.sport==='start'&&R){o.st={entD:rd(R.entD),flight:rd(R.flight),blk:rd(R.blk),vTo:rd(R.vTo),angTo:R.angTo==null?null:Math.round(R.angTo*10)/10,bodyEnt:R.bodyEnt==null?null:Math.round(R.bodyEnt),angEnt:R.angEnt==null?null:Math.round(R.angEnt),peakH:rd(R.peakH),tEnt:rd(R.tEnt),t5s:rd(R.t5s),boD:R.bo?rd(R.bo.d):null,boT:R.bo?rd(R.bo.t-(R.sig!=null?R.sig:R.dep!=null?R.dep:0)):null,boRef:R.sig!=null?'sig':'dep',uw:R.bo?rd(R.bo.uw):null,depSrc:R.depSrc};
     const A=startAngles(r,R),ka=A.find(a=>a.n==='무릎'),ha=A.find(a=>a.n==='골반'),r0=v=>v==null?null:Math.round(v);if(ka){o.st.kSet=r0(ka.set);o.st.kMin=r0(ka.min);o.st.kDep=r0(ka.dep)}if(ha){o.st.hSet=r0(ha.set);o.st.hDep=r0(ha.dep)}}
+  if(V.sport==='streamline'&&R&&!R.short&&R.k!=null){const r1=v=>v==null||!isFinite(v)?null:Math.round(v*10)/10,r4=v=>v==null||!isFinite(v)?null:Math.round(v*1e4)/1e4;
+    o.sl={vA:rd(R.vA),vB:rd(R.vB),gT:rd(R.T),dist:rd(R.dist),loss:r1(R.loss),k:r4(R.k),halfD:rd(R.halfD),r2:rd(R.r2),dY:rd(R.dY),src:R.src};
+    const S=R.pose;if(S)o.sl.pose={tilt:r1(S.tilt),rms:r4(S.rms),rmsM:rd(S.rmsM),dEar:S.dev.ear!=null?rd(S.dev.ear):null,dSh:rd(S.dev.shoulder),dHip:rd(S.dev.hip),dKnee:rd(S.dev.knee),rHip:r4(S.rel.hip),aSh:S.ang.sh==null?null:Math.round(S.ang.sh),aHip:S.ang.hip==null?null:Math.round(S.ang.hip),aKnee:S.ang.knee==null?null:Math.round(S.ang.knee),worst:S.worst}}
   if(V.sport==='dolphin'&&R&&R.n>=2)o.dk={n:R.n,f:rd(R.f),amp:rd(R.amp),v:rd(R.v),dpk:rd(R.dpk),ratio:rd(R.ratio),vDown:rd(R.vDown),knee:R.knee==null?null:Math.round(R.knee),rel:R.rel};
   if(V.sport==='cmj'&&R)o.cmj={h:rd(R.h),hSrc:R.hSrc,T:rd(R.T),depth:rd(R.depth),vTo:rd(R.vTo),ttt:rd(R.ttt),rsi:rd(R.rsi),pp:R.pp==null?null:Math.round(R.pp),sayers:R.sayers==null?null:Math.round(R.sayers),knee:R.knee==null?null:Math.round(R.knee),hDisp:rd(R.hDisp)};
   return o}
 /* 다시 불러온 결과와 저장한 값 비교 → 다른 항목 이름 */
-const MLAB={entD:'입수 거리',flight:'비행 시간',blk:'블록 시간',vTo:'이탈 속도',angTo:'이탈 각도',bodyEnt:'입수 몸 기울기',angEnt:'입수 머리 진행 각',peakH:'비행 최고 높이',tEnt:'입수까지',t5s:'5m 통과',boD:'브레이크아웃 거리',boT:'브레이크아웃 시간',uw:'수중 속도',depSrc:'이탈 판정 방법',kSet:'준비 무릎 각',kMin:'최소 무릎 각',kDep:'이탈 무릎 각',hSet:'준비 골반 각',hDep:'이탈 골반 각',
+const MLAB={vA:'시작 속도',vB:'끝 속도',gT:'글라이드 시간',dist:'글라이드 거리',k:'감속 계수',halfD:'절반 속도 거리',r2:'모형 일치도',dY:'깊이 변화',src:'구간 지정 방법',tilt:'몸 기울기',rms:'일직선 편차',rmsM:'일직선 편차(cm)',dEar:'머리 편차',dSh:'어깨 편차',dHip:'골반 편차',dKnee:'무릎 편차',rHip:'골반 편차(%)',aSh:'어깨 각',aHip:'골반 각',aKnee:'무릎 각',worst:'가장 벗어난 곳',entD:'입수 거리',flight:'비행 시간',blk:'블록 시간',vTo:'이탈 속도',angTo:'이탈 각도',bodyEnt:'입수 몸 기울기',angEnt:'입수 머리 진행 각',peakH:'비행 최고 높이',tEnt:'입수까지',t5s:'5m 통과',boD:'브레이크아웃 거리',boT:'브레이크아웃 시간',uw:'수중 속도',depSrc:'이탈 판정 방법',kSet:'준비 무릎 각',kMin:'최소 무릎 각',kDep:'이탈 무릎 각',hSet:'준비 골반 각',hDep:'이탈 골반 각',
   n:'횟수',f:'템포',amp:'진폭',v:'속도',dpk:'킥당 전진',ratio:'다운킥 비율',vDown:'다운킥 속도',knee:'무릎 각',h:'점프 높이',hSrc:'높이 계산 방법',T:'체공 시간',depth:'반동 깊이',ttt:'이륙까지 시간',rsi:'RSImod',pp:'최대 파워',sayers:'Sayers 파워',hDisp:'골반 상승',
   vPeak:'최고 속도',meanAsc:'평균 상승 속도',rom:'이동 높이',xr:'앞뒤 이동 폭',best:'최고 평균 속도',loss:'속도 저하',reps:'반복별 값'};
 function compareRec(rec){const now=recMetrics(),out=new Set();if(!V.res)return ['결과 없음'];
   const cmp=(a,b,key)=>{if(b==null&&a==null)return;if(typeof b==='number'||typeof a==='number'){if(a==null||b==null||Math.abs(a-b)>1e-3*Math.max(1,Math.abs(b)))out.add(key)}
     else if(b&&typeof b==='object'){if(!a||typeof a!=='object'){out.add(key);return}Object.keys(b).forEach(k=>cmp(a[k],b[k],Array.isArray(b)?key:k))}else if(a!==b)out.add(key)};
-  ['pu','st','dk','cmj'].forEach(k=>{if(rec[k])cmp(now[k],rec[k],k)});
+  ['sl','pu','st','dk','cmj'].forEach(k=>{if(rec[k])cmp(now[k],rec[k],k)});
   if(rec.sum&&V.res.sum)['vPeak','meanAsc','rom','xr'].forEach(k=>{if(rec.sum[k]!=null)cmp(V.res.sum[k],rec.sum[k],k)});
   return Array.from(out).map(k=>MLAB[k]||k)}
 function applySetup(rec){V.sport=rec.sport||V.sport;V.body=rec.body?String(rec.body):'';V.mass=rec.mass?String(rec.mass):'';if(rec.sport==='free')V.name=rec.name||'';
@@ -1125,7 +1264,7 @@ function applySetup(rec){V.sport=rec.sport||V.sport;V.body=rec.body?String(rec.b
   V.tmode=P.tmode||SPORT[V.sport].tmode||'tmpl';V.bgsub=P.bgsub!=null?!!P.bgsub:!!SPORT[V.sport].bgsub;V.preset=PRESET[P.preset]&&SPORT[V.sport].presets.includes(P.preset)?P.preset:SPORT[V.sport].presets[0];V.rate=P.rate||SPORT[V.sport].rate;V.slow=P.slow||1;V.half=P.half||V.half;
   V.t0=Math.max(0,Math.min(V.dur-.2,P.t0||0));V.t1=Math.max(V.t0+.2,Math.min(V.dur,P.t1||V.dur));
   V.cal={a:sc(P.cal&&P.cal.a),b:sc(P.cal&&P.cal.b),cm:P.cal&&P.cal.cm||SPORT[V.sport].cm};V.bar=sc(P.bar);V.target=sc(P.target);V.extra={};Object.keys(P.extra||{}).forEach(k=>V.extra[k]=sc(P.extra[k]));
-  V.man=cpo(P.man)||{};if(V.man.bo){V.man.bo.x*=kx;V.man.bo.y*=ky}V.track=null;V.res=null;V.rep=null;
+  V.man=cpo(P.man)||{};if(V.man.bo){V.man.bo.x*=kx;V.man.bo.y*=ky}if(V.man.pose&&V.man.pose.P)Object.keys(V.man.pose.P).forEach(k=>V.man.pose.P[k]=sc(V.man.pose.P[k]));V.track=null;V.res=null;V.rep=null;
   if(P.vdur&&Math.abs(P.vdur-V.dur)>.15)toast('영상 길이가 저장할 때와 다릅니다('+f2(P.vdur)+'초 → '+f2(V.dur)+'초). 같은 영상인지 확인해 주세요.')}
 function editBanner(){const r=S.editRec&&S.recs.find(x=>x.id===S.editRec);if(!r)return '';const P=r.setup,vn=P&&P.vname?'(<b>'+esc(P.vname)+'</b>)':'';let m;
   if(V.has&&!V.pending)m=(V.restoreMsg?esc(V.restoreMsg)+' ':'')+'결과를 확인한 뒤 아래 <b>고친 내용 저장</b>을 누르면 기존 기록이 바뀝니다.';
@@ -1207,11 +1346,15 @@ function viewRecords(){const all=S.recs.slice().sort((a,b)=>a.created<b.created?
   let h='<div class="card"><div class="row"><h2>기록</h2><div class="field" style="max-width:230px;margin-left:auto"><label for="fRecSport">종목</label><select id="fRecSport">'+Object.keys(SPORT).map(k=>'<option value="'+k+'"'+(sp===k?' selected':'')+'>'+SPORT[k].n+' ('+cnt(k)+')</option>').join('')+'</select></div></div>';
   if(!list.length)return h+'<p class="muted">이 종목으로 저장한 기록이 없습니다.</p></div>';
   h+=editFormHTML(list);
-  return h+(sp==='pullup'?pullRecHTML(list):sp==='cmj'?cmjRecHTML(list):sp==='start'?startRecHTML(list):sp==='dolphin'?dolphinRecHTML(list):freeRecHTML(list))+'</div>'}
+  return h+(sp==='streamline'?slRecHTML(list):sp==='pullup'?pullRecHTML(list):sp==='cmj'?cmjRecHTML(list):sp==='start'?startRecHTML(list):sp==='dolphin'?dolphinRecHTML(list):freeRecHTML(list))+'</div>'}
 function startRecHTML(list){const ok=list.filter(r=>r.st&&r.st.entD!=null).sort((a,b)=>a.created-b.created),g=v=>v==null?'–':f2(v),kn=list.some(r=>r.st&&r.st.kSet!=null);let h='<h3>입수 거리 추이</h3>';
   h+=ok.length?lineSVG(ok.map(r=>({label:r.date.slice(5).replace('-','.'),v:r.st.entD})),'m'):'<p class="muted">입수가 인식된 기록이 없습니다.</p>';
   return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">블록</th><th class="v">비행</th><th class="v">입수 거리</th><th class="v">이탈 속도</th><th class="v">이탈 각</th>'+(kn?'<th class="v">무릎 준비→이탈</th>':'')+'<th class="v">브레이크아웃</th><th></th></tr>'+
     list.map(r=>{const c=r.st||{};return '<tr><td class="num">'+esc(r.date)+noteHTML(r)+'</td><td class="v">'+g(c.blk)+'</td><td class="v">'+g(c.flight)+(c.depSrc==='vel'?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+(c.entD==null?'–':f2(c.entD)+'m')+'</td><td class="v">'+g(c.vTo)+'</td><td class="v">'+(c.angTo==null?'–':f0(c.angTo)+'°')+'</td>'+(kn?'<td class="v">'+(c.kSet==null?'–':c.kSet+'°→'+(c.kDep==null?'–':c.kDep+'°'))+'</td>':'')+'<td class="v">'+(c.boD==null?'–':f1(c.boD)+'m · '+f2(c.boT)+'초')+'</td><td style="text-align:right;white-space:nowrap">'+recBtns(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">시간 단위는 초, 속도는 m/s입니다. 브레이크아웃 시간은 출발 신호를 지정한 기록은 신호 기준, 아니면 이탈 기준입니다.</p>'}
+function slRecHTML(list){const ok=list.filter(r=>r.sl&&r.sl.halfD!=null).sort((a,b)=>a.created-b.created),g=v=>v==null?'–':f2(v);let h='<h3>절반 속도 거리 추이</h3>';
+  h+=ok.length?lineSVG(ok.map(r=>({label:r.date.slice(5).replace('-','.'),v:r.sl.halfD})),'m')+'<p class="small muted">길수록 덜 감속하는(저항이 작은) 글라이드입니다. 기준 길이를 같은 방식(내 스트림라인 길이)으로 찍은 기록끼리 비교하세요.</p>':'<p class="muted">글라이드가 인식된 기록이 없습니다.</p>';
+  return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">속도 시작→끝</th><th class="v">감소</th><th class="v">k</th><th class="v">절반 거리</th><th class="v">일직선 편차</th><th class="v">골반</th><th></th></tr>'+
+    list.map(r=>{const c=r.sl||{},q=c.pose||{};return '<tr><td class="num">'+esc(r.date)+noteHTML(r)+'</td><td class="v">'+g(c.vA)+'→'+g(c.vB)+'</td><td class="v">'+(c.loss==null?'–':f0(c.loss)+'%')+'</td><td class="v">'+(c.k==null?'–':c.k.toFixed(3))+(c.r2!=null&&c.r2<.8?' <span class="pill n">참고</span>':'')+'</td><td class="v">'+(c.halfD==null?'–':f1(c.halfD)+'m')+'</td><td class="v">'+(q.rms==null?'–':f1(q.rms*100)+'%')+'</td><td class="v">'+(q.dHip==null?'–':(q.dHip>=0?'+':'')+f1(q.dHip*100)+'cm')+'</td><td style="text-align:right;white-space:nowrap">'+recBtns(r)+'</td></tr>'}).join('')+'</table></div><p class="small muted">속도는 m/s, k는 감속 계수(1/m, 작을수록 좋음)입니다. 일직선 편차는 몸 길이 대비 %, 골반은 손끝–발목 선에서 위(+)·아래(−)로 벗어난 거리입니다. R²가 0.8 미만이면 참고로 표시합니다.</p>'}
 function dolphinRecHTML(list){const ok=list.filter(r=>r.dk&&r.dk.f!=null).sort((a,b)=>a.created-b.created),g=v=>v==null?'–':f2(v);let h='<h3>킥 템포 추이</h3>';
   h+=ok.length?lineSVG(ok.map(r=>({label:r.date.slice(5).replace('-','.'),v:r.dk.f})),'회/초'):'<p class="muted">킥이 인식된 기록이 없습니다.</p>';
   return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">횟수</th><th class="v">템포</th><th class="v">진폭</th><th class="v">전진 속도</th><th class="v">킥당 전진</th><th></th></tr>'+
@@ -1289,6 +1432,18 @@ function viewGuide(){return '<div class="card"><h2>먼저 알아둘 것</h2><div
  '<li><b>4번</b>: 기본 "머리 + 골반·무릎·발목 + 발끝 띠"로 <b>머리(수모)</b>, <b>골반</b>, <b>앞다리 무릎</b>, <b>앞발 발목</b>, <b>앞발 발끝(띠)</b> 순서로 찍고, 추적 방식은 "자세 인식(AI) + 무늬"로 둡니다. 발끝은 따라가지 않고 출발대 앞 끝의 얇은 띠로 이탈을 재므로, 손에 가려도 발가락이 있을 자리(출발대 앞 끝)를 찍으면 됩니다. 무릎·발목을 빼고 싶으면 "머리 + 골반 + 발끝 띠"를 고릅니다. 그다음 <b>수면 높이 찍기</b>로 물 표면 선을 누릅니다.</li>'+
  '<li><b>5번 분석 시작</b> → 결과 아래 "시점 지정"에서 출발 신호 프레임을 지정하면 블록 시간이 나옵니다. 이탈·입수가 틀렸으면 그 프레임에서 직접 지정하고, 브레이크아웃 프레임에서 "브레이크아웃 위치 찍기"로 머리를 누릅니다.</li></ol>'+
  '<p><b>결과 보는 법</b>: <b>입수 거리</b>와 <b>비행 시간</b>, <b>이탈 속도</b>가 핵심입니다. 무릎·골반 각도는 준비 자세, 밀 때 가장 굽힌 값, 이탈·입수 순간으로 봅니다. 머리가 화면 밖에서 입수하면 입수 값은 짐작한 값이라고 표시되니, 입수 장면이 화면 안에 들어오게 찍으세요. 물속에서는 수면 반사 때문에 머리 추적이 자주 끊기니, 입수 이후 값(5m 통과 등)은 영상으로 한 번 확인하세요.</p></div></div>'+
+ '<div class="card"><h2>스트림라인(벽 푸시·글라이드) 따라 하기</h2><div class="prose">'+
+ '<p><b>찍기 전</b></p><ol>'+
+ '<li><b>물속에서 옆으로</b>, 레인과 직각으로, 카메라는 고정합니다. 벽을 민 뒤 킥 없이 미끄러지는 1.5~3초가 화면을 가로지르게 찍습니다. 첫 킥이 나오기 전까지가 분석 구간입니다.</li>'+
+ '<li>매번 <b>같은 깊이</b>(예: 수면 아래 0.5~0.7m)로 밀어야 비교됩니다. 수면에 가까울수록 물결 저항 때문에 더 빨리 감속합니다.</li>'+
+ '<li>60fps 이상. 240fps 영상이 실제 속도로 저장됐으면 영상 속도는 "실제 속도"입니다.</li></ol>'+
+ '<p><b>앱에서</b></p><ol>'+
+ '<li><b>1번</b>: 종목 "스트림라인 (벽 푸시·글라이드)".</li>'+
+ '<li><b>2번 분석 구간</b>: 골반(수영복)이 화면에 완전히 들어온 프레임부터, 첫 킥으로 무릎을 굽히기 시작하거나 골반이 화면을 벗어나기 직전까지.</li>'+
+ '<li><b>3번 기준 길이</b>: 몸 전체가 보이는 프레임에서 손끝 → 발끝을 찍고 내 스트림라인 길이(벽에 등을 대고 팔을 모아 뻗은 채 까치발로 섰을 때 손끝 높이, cm)를 넣습니다. 한 번 재 두면 계속 같은 값을 씁니다.</li>'+
+ '<li><b>4번</b>: <b>골반</b>(수영복 옆면 가운데)을 찍습니다. 추적 방식은 "무늬만"(기본)이면 수영복 무늬를 잘 따라갑니다.</li>'+
+ '<li><b>5번 분석 시작</b> → 결과의 <b>스트림라인 자세</b>에서 몸 전체가 보이는 프레임으로 옮겨 "자세 점 찍기"(손끝·머리·어깨·골반·무릎·발목) 또는 "AI로 자세 점 찾기"를 누릅니다.</li></ol>'+
+ '<p><b>결과 보는 법</b>: <b>감속 계수 k</b>(작을수록 좋음)와 <b>절반 속도 거리</b>(길수록 좋음)가 저항을 나타냅니다. 시작 속도가 달라도 k는 거의 그대로라 날짜끼리 비교하기 좋습니다. 자세는 손끝–발목 선에서 머리·어깨·골반·무릎이 벗어난 거리와 어깨·골반·무릎 각도로 봅니다. 자세가 좋아졌는데 k가 줄었는지 함께 보면 됩니다. 한계: 한 대의 카메라로 옆에서 본 평면 값이고, 몸이 카메라 쪽으로 기울거나 화면 가장자리(렌즈 왜곡)에서는 오차가 커집니다.</p></div></div>'+
  '<div class="card"><h2>돌핀킥 따라 하기</h2><div class="prose">'+
  '<p><b>찍기 전</b></p><ol>'+
  '<li><b>물속에서 옆으로</b> 찍는 것이 가장 좋습니다(방수 케이스, 수중 카메라). 레인과 직각, 선수와 같은 깊이, 카메라는 고정합니다.</li>'+
@@ -1298,9 +1453,9 @@ function viewGuide(){return '<div class="card"><h2>먼저 알아둘 것</h2><div
  '<li>고프로 240fps를 슬로모션으로 저장한 영상은 1번 <b>영상 속도</b>를 배율(보통 4배)에 맞춰야 템포·속도가 맞습니다. 킥 한 번이 재생 화면에서 1.5초 넘게 걸리면 슬로모션입니다.</li></ol>'+
  '<p><b>앱에서</b></p><ol>'+
  '<li><b>1번</b>: 종목 "돌핀킥 (수중)".</li>'+
- '<li><b>2번 분석 구간</b>: 몸 전체가 화면에 들어온 첫 프레임부터 화면을 벗어나기 직전까지.</li>'+
- '<li><b>3번 기준 길이</b>: 선수와 같은 거리에 있는, 길이를 아는 두 점(바닥 선 표시, 타일 줄 등)을 찍고 길이를 넣습니다.</li>'+
- '<li><b>4번</b>: "발목 + 골반"을 고르고 <b>발목</b>(바깥 복사뼈), <b>골반</b>(수영복 옆) 순서로 찍습니다. 사다리·레인 선 위에 찍지 않게 확대경으로 확인하세요. <b>배경 빼기</b>는 켜 둡니다(돌핀킥 기본): 카메라가 고정이면 물·벽·사다리를 지우고, 골반에 이어진 실루엣의 뒤쪽 끝을 발끝으로 잡습니다. 물속에서는 AI 자세 인식이 사람을 거의 찾지 못하므로 추적 방식은 "무늬만"이어도 됩니다.</li>'+
+ '<li><b>2번 분석 구간</b>: 몸 전체가 화면에 들어온 첫 프레임부터, 찍은 점(어깨 포함) 중 하나라도 화면 밖으로 나가기 직전까지. 점이 화면 밖에 있으면 각도가 엉뚱하게 나옵니다.</li>'+
+ '<li><b>3번 기준 길이</b>: 선수와 같은 거리에 있는 길이를 아는 두 점이 가장 좋습니다. 마땅한 것이 없으면 몸이 곧게 펴진 프레임에서 손끝–발끝을 찍고 스트림라인 길이(까치발로 팔을 모아 뻗었을 때 손끝 높이)를 넣습니다. 바닥 선은 선수보다 멀리 있어 진폭·속도가 작게 나옵니다.</li>'+
+ '<li><b>4번</b>: "발목 + 골반"을 고르고 <b>발목</b>(바깥 복사뼈), <b>골반</b>(수영복 옆) 순서로 찍습니다. 사다리·레인 선 위에 찍지 않게 확대경으로 확인하세요. 추적 방식은 <b>자세 인식(AI) + 무늬</b>(기본)입니다. 맑은 물속 옆모습이면 AI가 무릎·발목을 따라갑니다(사용자 영상 시험: 발목·골반·무릎·어깨 모두 연결, 몸 뒤집힘 0회). 무릎 각까지 보려면 "발목 + 골반·무릎·어깨"를 고르세요. 물이 탁해 AI가 몸을 못 찾으면 "무늬만"과 <b>배경 빼기</b>를 켜세요(골반에 이어진 실루엣의 뒤쪽 끝을 발끝으로 잡음). AI는 GitHub Pages 주소에서만 됩니다.</li>'+
  '<li><b>5번 분석 시작</b> → 재생하며 오른쪽 위 "킥 n/N" 표시가 실제 킥과 맞는지 봅니다. 점이 어긋난 곳은 "현재 시점부터 위치 고치기"로 고칩니다.</li></ol>'+
  '<p><b>결과 보는 법</b>: <b>킥 템포</b>와 <b>킥당 전진</b>을 함께 봅니다. 템포가 같아도 킥당 전진이 길면 킥 한 번이 더 효율적입니다. 진폭이 너무 크면 저항이 늘어 전진 속도가 오히려 떨어질 수 있습니다.</p></div></div>'+
  '<div class="card"><h2>공통 촬영 조건</h2><div class="prose"><ul>'+
@@ -1328,7 +1483,7 @@ function render(){const v=S.view;document.querySelectorAll('nav.tabs a').forEach
 function refresh(){whereUI();if(S.view==='records')render()}
 function route(){if(V.busy){V.abort=true}stopPlay();const h=(location.hash||'').replace('#','');S.view=['analyze','records','guide'].includes(h)?h:'analyze';S.delAsk=null;render();window.scrollTo(0,0)}
 window.addEventListener('hashchange',route);
-function clearTrack(){V.track=null;V.res=null;V.rep=null;V.man={};V.fixes=[];V.restoreMsg=''}
+function clearTrack(){V.track=null;V.res=null;V.rep=null;V.man=V.man&&V.man.pose?{pose:V.man.pose}:{}; /* 스트림라인 자세 점은 추적과 상관없어 남김 */V.fixes=[];V.restoreMsg=''}
 /* 되돌리기: 점·구간·설정을 바꾸기 직전 상태를 쌓아 둠. 추적 결과는 새로 만들어지므로 참조만 보관 */
 const UH={u:[],r:[]};
 const cp=a=>a?a.slice():a;
@@ -1349,6 +1504,13 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
   else if(t.id==='setTo'||t.id==='setLd'){stopPlay();remember(t.id==='setTo'?'이륙 지정':'착지 지정');V.man[t.id==='setTo'?'to':'ld']=V.cur;reanalyze();render()}
   else if(t.id==='mkSig'||t.id==='mkDep'||t.id==='mkEnt'){stopPlay();const k={mkSig:'sig',mkDep:'dep',mkEnt:'ent'}[t.id];remember({sig:'출발 신호 지정',dep:'출발대 이탈 지정',ent:'입수 지정'}[k]);V.man[k]=V.cur;reanalyze();render()}
   else if(t.id==='boBtn'){stopPlay();V.mode=V.mode==='bo'?null:'bo';render()}
+  else if(t.id==='gA'||t.id==='gB'){stopPlay();remember(t.id==='gA'?'글라이드 시작 지정':'글라이드 끝 지정');V.man=Object.assign({},V.man,{[t.id]:V.cur});reanalyze();render()}
+  else if(t.id==='gReset'){remember('글라이드 구간 자동');const m=Object.assign({},V.man);delete m.gA;delete m.gB;V.man=m;reanalyze();render()}
+  else if(t.id==='slBtn'){stopPlay();if(V.mode==='slpose'){V.mode=null;render();return}remember('자세 점 새로 찍기');V.man=Object.assign({},V.man,{pose:{t:V.cur,P:{}}});V.slIdx=0;V.mode='slpose';reanalyze();render();toStage()}
+  else if(t.dataset.slp!=null){stopPlay();const pz=V.man.pose;if(!pz)return;V.slIdx=+t.dataset.slp;V.mode='slpose';if(Math.abs(V.cur-pz.t)>halfFrame()+1e-6)await setCur(pz.t);render();toStage()}
+  else if(t.id==='slGo'){const pz=V.man.pose;if(!pz)return;stopPlay();await setCur(pz.t);render();toStage()}
+  else if(t.id==='slDel'){remember('자세 점 지우기');const m=Object.assign({},V.man);delete m.pose;V.man=m;if(V.mode==='slpose')V.mode=null;reanalyze();render()}
+  else if(t.id==='slAI'){slPoseAI()}
   else if(t.id==='manReset'){remember(V.sport==='start'?'직접 지정 지우기':'이륙·착지 지정 해제');V.man={};reanalyze();render()}
   else if(t.id==='calBtn'){stopPlay();V.mode=V.mode==='calA'||V.mode==='calB'?null:'calA';render()}
   else if(t.id==='tgBtn'){stopPlay();if(V.mode==='target'){V.mode=null;render()}else{const nx=ptList().findIndex(q=>!ptPos(q[0]));V.tIdx=nx<0?0:nx;V.mode='target';await setCur(V.t0);render()}}
@@ -1392,7 +1554,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
 });
 document.addEventListener('change',async e=>{const t=e.target;
   if(t.id==='file'&&t.files&&t.files[0])await loadFile(t.files[0]);
-  else if(t.id==='fSport'){remember('종목 변경');V.sport=t.value;const sd=SPORT[V.sport];V.tmode=sd.tmode||'tmpl';V.bgsub=!!sd.bgsub;V.preset=sd.presets[0];V.extra={};V.bar=null;V.man={};V.mode=null;V.fixK='main';V.rate=sd.rate;if(V.chart==='ang')V.chart='vy';if(V.has){if(!V.cal.a)V.cal.cm=sd.cm;V.target=null;clearTrack();render()}else{setDemo();render()}}
+  else if(t.id==='fSport'){remember('종목 변경');V.sport=t.value;const sd=SPORT[V.sport];V.tmode=sd.tmode||'tmpl';V.bgsub=!!sd.bgsub;V.preset=sd.presets[0];V.extra={};V.bar=null;V.man={};V.mode=null;V.fixK='main';V.rate=sd.rate;if(V.sport==='streamline')V.chart='vx';else if(V.chart==='ang'||(V.chart==='vx'&&!sd.swim))V.chart='vy';if(V.has){if(!V.cal.a)V.cal.cm=sd.cm;V.target=null;clearTrack();render()}else{setDemo();render()}}
   else if(t.id==='fBody'){V.body=t.value;softUpdate()}
   else if(t.id==='fRecSport'){S.rsp=t.value;S.sel=null;S.delAsk=null;render()}
   else if(t.id==='fSlow'){V.slow=+t.value;if(V.has){reanalyze();render()}}
