@@ -747,6 +747,15 @@ function seekTo(t){return new Promise(res=>{t=Math.max(0,Math.min(V.dur-.001,t))
   if(vid.requestVideoFrameCallback)vid.requestVideoFrameCallback((now,md)=>{gf=true;if(md&&typeof md.mediaTime==='number')mt=md.mediaTime;chk()});
   vid.addEventListener('seeked',()=>{gs=true;chk();setTimeout(fin,150)},{once:true});vid.currentTime=t;setTimeout(fin,2500)})}
 function grab(){if(V.has&&vid.readyState>=2&&wctx)wctx.drawImage(vid,0,0,V.cw,V.ch)}
+/* 영상 지문: 영상 길이의 5~95% 사이 6프레임을 32×18 회색조로 줄인 값(3456개). 기록에 같이 저장해 두고, 고치려고 다시 고른 영상이 같은지 비교.
+   길이가 비슷한 다른 영상도 구별하고, 같은 영상을 다시 받거나 다시 저장해 화질이 조금 달라진 것은 같다고 봄 */
+async function vidFP(){try{const c=document.createElement('canvas');c.width=32;c.height=18;const x=c.getContext('2d',{willReadFrequently:true}),o=[];
+  for(const f of [.05,.23,.41,.59,.77,.95]){await seekTo(V.dur*f);x.drawImage(vid,0,0,32,18);const d=x.getImageData(0,0,32,18).data;for(let i=0;i<d.length;i+=4)o.push(Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]))}
+  return o}catch(e){return null}}
+/* 두 지문의 차이: 프레임마다 평균 밝기를 맞춘 뒤 밝기가 25 넘게 다른 픽셀의 비율, 그중 가장 큰 프레임 값(0~1).
+   배경이 같은 수영장이어도 선수가 다른 자리에 있으면 그 프레임에서 커짐 */
+function fpDiff(a,b){if(!a||!b||a.length!==b.length||a.length%576)return null;const n=576,F=a.length/n;let mx=0;for(let f=0;f<F;f++){let ma=0,mb=0;for(let i=0;i<n;i++){ma+=a[f*n+i];mb+=b[f*n+i]}ma/=n;mb/=n;let k=0;for(let i=0;i<n;i++)if(Math.abs(a[f*n+i]-ma-(b[f*n+i]-mb))>25)k++;mx=Math.max(mx,k/n)}return mx}
+const FPLIM=.03;
 async function loadFile(file){stopPlay();V.vname=file.name||'';if(vid.src&&vid.src.indexOf('blob:')===0)URL.revokeObjectURL(vid.src);vid.src=URL.createObjectURL(file);vid.load();
   try{await once(vid,'loadedmetadata')}catch(e){toast('이 영상은 브라우저에서 열 수 없습니다. MP4(H.264)로 다시 시도해 주세요.');return}
   const vw=vid.videoWidth,vh=vid.videoHeight,sc=Math.min(1,720/Math.max(vw,vh));if(!vw||!isFinite(vid.duration)){toast('영상 정보를 읽지 못했습니다.');return}
@@ -754,9 +763,11 @@ async function loadFile(file){stopPlay();V.vname=file.name||'';if(vid.src&&vid.s
   resetUndo();V.ai=null;V.aiMsg='';V.bgImg=null;V.has=true;V.dur=vid.duration;V.t0=0;V.t1=Math.min(V.dur,30);V.cur=0;V.track=null;V.res=null;V.rep=null;V.target=null;V.extra={};V.bar=null;V.man={};V.cal={a:null,b:null,cm:V.cal.cm||SPORT[V.sport].cm};V.mode=null;V.fixes=[];V.restoreMsg='';
   try{await vid.play();vid.pause()}catch(e){}
   try{if(vid.readyState<2)await once(vid,'loadeddata',6000)}catch(e){}
+  V.fsize=file.size||0;V.fp=await vidFP();
   await seekTo(0);grab();
   /* 기록 고치기 중 다른 영상(길이가 0.15초 넘게 다름)을 고르면 분석하지 않고 알림. 기록은 그대로, 같은 영상을 다시 고를 때까지 기다림 */
-  if(V.pending&&V.pending.setup&&V.pending.setup.vdur&&Math.abs(V.pending.setup.vdur-V.dur)>.15){const P=V.pending.setup;
+  const vMis=P=>{if(!P)return false;if(P.vdur&&Math.abs(P.vdur-V.dur)>.15)return true;const d=fpDiff(P.fp,V.fp);if(d!=null)return d>FPLIM;return false};
+  if(V.pending&&vMis(V.pending.setup)){const P=V.pending.setup;
     V.vidMis='고른 영상'+(V.vname?'(<b>'+esc(V.vname)+'</b>, ':'(')+f2(V.dur)+'초)이 저장할 때 영상'+(P.vname?'(<b>'+esc(P.vname)+'</b>, ':'(')+f2(P.vdur)+'초)과 다릅니다. 분석하지 않았습니다. 같은 영상을 다시 골라 주세요.';
     render();toast('저장할 때와 다른 영상입니다. 분석하지 않았습니다.');return}
   V.vidMis='';
@@ -1241,7 +1252,7 @@ function guideText(){if(V.busy)return '추적 중입니다 '+V.prog;if(!V.has)re
   return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:V.sport==='start'?'<b>수면</b>(물 표면이 닿는 높이, 레인로프가 떠 있는 선)을 누르세요. 머리가 이 선 아래로 내려간 순간을 입수로 봅니다.':'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',bo:'브레이크아웃 순간(머리가 수면 위로 처음 보이는 프레임)에서 <b>머리 위치</b>를 누르세요. 그 시각과 출발벽에서의 거리를 기록합니다.',slpose:'자세 점: <b>'+(SLK[V.slIdx]||SLK[0])[1]+'</b>를 누르세요 ('+((V.slIdx|0)+1)+'/'+SLK.length+'). '+SLH[(SLK[V.slIdx]||SLK[0])[0]]+'. 카메라 쪽 팔·다리를 찍고, 누른 채 움직이면 확대경이 나옵니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(phint(ptList()[V.tIdx][0])||'관절 중심을 찍습니다.'))+' 누른 채 움직이면 확대경이 나옵니다.',fix:'고칠 점: <b>'+esc(ptName(V.fixK))+'</b>(노란 고리). 올바른 자리를 누르거나, 다른 점을 끌면 그 점을 고칩니다. 고친 곳은 분홍 ◆로 남고, 다 고친 뒤 결과 아래 <b>반영</b>을 누르세요.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
 /* 기록 고치기: 분석 설정(점·구간·기준 길이·수면/바·직접 지정 시점)을 기록에 함께 저장해 두고, 같은 영상을 다시 고르면 불러옴 */
 const cpo=o=>o==null?o:JSON.parse(JSON.stringify(o));
-function setupOf(){return {bgsub:V.bgsub,tmode:V.tmode,sport:V.sport,preset:V.preset,rate:V.rate,slow:V.slow,half:V.half,t0:V.t0,t1:V.t1,cal:cpo(V.cal),bar:cpo(V.bar),target:cpo(V.target),extra:cpo(V.extra),man:cpo(V.man),cw:V.cw,ch:V.ch,vname:V.vname||'',vdur:Math.round(V.dur*1000)/1000}}
+function setupOf(){return {bgsub:V.bgsub,tmode:V.tmode,sport:V.sport,preset:V.preset,rate:V.rate,slow:V.slow,half:V.half,t0:V.t0,t1:V.t1,cal:cpo(V.cal),bar:cpo(V.bar),target:cpo(V.target),extra:cpo(V.extra),man:cpo(V.man),cw:V.cw,ch:V.ch,vname:V.vname||'',fsize:V.fsize||0,fp:V.fp||null,vdur:Math.round(V.dur*1000)/1000}}
 /* 기록에 남기는 종목별 결과(저장·다시 불러온 뒤 비교에 같이 씀) */
 function recMetrics(){const r=V.res,R=V.rep,rd=v=>v==null||!isFinite(v)?null:Math.round(v*1000)/1000,o={};if(!r)return o;
   if(V.sport==='pullup'&&R&&R.sum)o.pu=Object.assign({},R.sum,{reps:R.reps.map(q=>({rom:rd(q.rom),T:rd(q.T),mean:rd(q.mean),peak:rd(q.peak)}))});
