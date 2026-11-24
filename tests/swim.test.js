@@ -1,7 +1,7 @@
 // 수영 스타트·돌핀킥 분석 시험 (합성 궤적)
 const fs=require('fs'),path=require('path');const html=fs.readFileSync(path.join(__dirname,'../motion/index.html'),'utf8');
 const core=html.match(/<script id="core">([\s\S]*?)<\/script>/)[1];const c={};
-new Function('c',core+';Object.assign(c,{analyze,startReport,dolphinReport,extrema,flightFromBand,G,angleSeries,glideKick})')(c);
+new Function('c',core+';Object.assign(c,{analyze,startReport,dolphinReport,extrema,flightFromBand,G,angleSeries,glideKick,lmTrack})')(c);
 let fail=0;const near=(n,a,b,tol)=>{const ok=a!=null&&Math.abs(a-b)<=tol;if(!ok)fail++;console.log((ok?'ok  ':'FAIL')+' '+n+': '+(a==null?a:+a.toFixed(4))+' vs '+(+b.toFixed(4))+' (±'+tol+')')};
 const herm=(t,t0,t1,y0,y1,v0,v1)=>{const d=t1-t0,u=(t-t0)/d;return (2*u**3-3*u**2+1)*y0+(u**3-2*u**2+u)*d*v0+(-2*u**3+3*u**2)*y1+(u**3-u**2)*d*v1};
 let seed=5;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647-.5};
@@ -68,4 +68,12 @@ for(const [fsv,noise,f,A,v,dur,df] of [[60,0,2.2,.45,1.8,3,.45],[30,.5,2.2,.45,1
   const R=c.dolphinReport(r,{hip:hr,hipOff:{dx:-.95,dy:0}}),Gk=c.glideKick(hr,R,{});
   console.log('glide→kick',Gk&&{k:Gk.G&&Gk.G.k,tB:Gk.tB,tK:Gk.tK,vK:Gk.vK,tStar:Gk.tStar,dt:Gk.dt});
   near('glide k',Gk.G.k,.25,.03);near('glide end',Gk.tB,.95,.06);near('dolphin avg',Gk.vK,1.8,.06);near('kick start late by',Gk.dt,.32,.1)}
+// 각도를 모델 관절로: 추적한 무릎 점이 엉뚱해도(90px 튐) 모델 관절로 계산한 무릎 각은 맞아야 함(골반(0,0)–무릎(100,0)–발목(100,100) = 90°)
+{const n=60,tr={t:[],x:[],y:[],c:[],P:{hip:{x:[],y:[],c:[]},knee:{x:[],y:[],c:[]}},lm:[]};for(let i=0;i<n;i++){tr.t.push(i/60);tr.x.push(300);tr.y.push(300);tr.c.push(1);tr.P.hip.x.push(200);tr.P.hip.y.push(200);tr.P.hip.c.push(1);
+    tr.P.knee.x.push(i%10===0?390:300);tr.P.knee.y.push(i%10===0?110:200);tr.P.knee.c.push(1);const F=new Float32Array(33*3).fill(NaN);[[23,200,200],[25,300,200],[27,300,300]].forEach(([j,x,y])=>{F[3*j]=x;F[3*j+1]=y;F[3*j+2]=.5});tr.lm.push(F)}
+  const defs=[{n:'무릎',pts:['hip','knee','main']}],o={pxPerM:100,slow:1,rate:60,win:.04,angles:defs,W:720,H:405};
+  const raw=c.analyze(tr,o).angles[0],lm=c.analyze(tr,Object.assign({},o,{angLM:{hip:[23,24],knee:[25,26],main:[27,28]},lmLim:200})).angles[0];
+  const sd=a=>{const m=a.reduce((x,y)=>x+y,0)/a.length;return Math.sqrt(a.reduce((x,y)=>x+(y-m)**2,0)/a.length)};
+  console.log('knee from track sd',sd(raw.a).toFixed(1),'from model sd',sd(lm.a).toFixed(2),'model mean',(lm.a.reduce((x,y)=>x+y,0)/lm.a.length).toFixed(1),'share',lm.lmShare);
+  near('lm knee angle',lm.a[30],90,1);near('lm knee angle steady',sd(lm.a),0,.5);if(lm.src!=='lm'){fail++;console.log('FAIL src')}}
 console.log(fail?fail+' FAILED':'ALL PASS');process.exit(fail?1:0)
