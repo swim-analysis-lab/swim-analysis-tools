@@ -826,7 +826,7 @@ function play(){if(V.busy)return;if(V.playing){stopPlay();return}V.playing=true;
 
 /* ----- 자세 인식(MediaPipe Pose, 영상 모드): 관절을 프레임마다 찾고, 무늬로 주변 몇 px만 다듬음 ----- */
 const POSE=Object.assign({lib:'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.34/vision_bundle.mjs',wasm:'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.34/wasm',
-  model:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task'},window.__AUTO||{});
+  model:new URL('../models/pose_landmarker_heavy_float16_20230428.task',location.href).href,modelId:'pose_landmarker_heavy float16 2023-04-28 (sha256 64437af8)'} /* 모델 파일은 저장소에 고정(models/README.md). Google의 latest 주소는 예고 없이 바뀔 수 있음 */,window.__AUTO||{});
 const PMAP={hip:[23,24],knee:[25,26],ankle:[27,28],toe:[31,32],heel:[29,30],shoulder:[11,12],elbow:[13,14],wrist:[15,16]};
 let poseP=null,poseTs=0;
 function poseLoader(){if(poseP)return poseP;poseP=(async()=>{const M=await import(POSE.lib),fs=await M.FilesetResolver.forVisionTasks(POSE.wasm);
@@ -1368,7 +1368,7 @@ function guideText(){if(V.busy)return '추적 중입니다 '+V.prog;if(!V.has)re
   return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:V.sport==='start'?'<b>수면</b>(물 표면이 닿는 높이, 레인로프가 떠 있는 선)을 누르세요. 머리가 이 선 아래로 내려간 순간을 입수로 봅니다.':'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',bo:'브레이크아웃 순간(머리가 수면 위로 처음 보이는 프레임)에서 <b>머리 위치</b>를 누르세요. 그 시각과 출발벽에서의 거리를 기록합니다.',slpose:'자세 점: <b>'+(SLK[V.slIdx]||SLK[0])[1]+'</b>를 누르세요 ('+((V.slIdx|0)+1)+'/'+SLK.length+'). '+SLH[(SLK[V.slIdx]||SLK[0])[0]]+'. 카메라 쪽 팔·다리를 찍고, 누른 채 움직이면 확대경이 나옵니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(phint(ptList()[V.tIdx][0])||'관절 중심을 찍습니다.'))+' 누른 채 움직이면 확대경이 나옵니다.',fix:'고칠 점: <b>'+esc(ptName(V.fixK))+'</b>(노란 고리). 올바른 자리를 누르거나, 다른 점을 끌면 그 점을 고칩니다. 고친 곳은 분홍 ◆로 남고, 다 고친 뒤 결과 아래 <b>반영</b>을 누르세요.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
 /* 기록 고치기: 분석 설정(점·구간·기준 길이·수면/바·직접 지정 시점)을 기록에 함께 저장해 두고, 같은 영상을 다시 고르면 불러옴 */
 const cpo=o=>o==null?o:JSON.parse(JSON.stringify(o));
-function setupOf(){return {pan:!!V.pan,bgsub:V.bgsub,tmode:V.tmode,sport:V.sport,preset:V.preset,rate:V.rate,slow:V.slow,half:V.half,t0:V.t0,t1:V.t1,cal:cpo(V.cal),bar:cpo(V.bar),target:cpo(V.target),extra:cpo(V.extra),man:cpo(V.man),cw:V.cw,ch:V.ch,vname:V.vname||'',fsize:V.fsize||0,fp:V.fp||null,vdur:Math.round(V.dur*1000)/1000}}
+function setupOf(){return {poseModel:V.tmode==='pose'?POSE.modelId:undefined,pan:!!V.pan,bgsub:V.bgsub,tmode:V.tmode,sport:V.sport,preset:V.preset,rate:V.rate,slow:V.slow,half:V.half,t0:V.t0,t1:V.t1,cal:cpo(V.cal),bar:cpo(V.bar),target:cpo(V.target),extra:cpo(V.extra),man:cpo(V.man),cw:V.cw,ch:V.ch,vname:V.vname||'',fsize:V.fsize||0,fp:V.fp||null,vdur:Math.round(V.dur*1000)/1000}}
 /* 기록에 남기는 종목별 결과(저장·다시 불러온 뒤 비교에 같이 씀) */
 function recMetrics(){const r=V.res,R=V.rep,rd=v=>v==null||!isFinite(v)?null:Math.round(v*1000)/1000,o={};if(!r)return o;
   if(V.sport==='pullup'&&R&&R.sum)o.pu=Object.assign({},R.sum,{reps:R.reps.map(q=>({rom:rd(q.rom),T:rd(q.T),mean:rd(q.mean),peak:rd(q.peak)}))});
@@ -1525,7 +1525,7 @@ function trendHTML(list,sp,M){S.trend=S.trend||{};const has=M.filter(m=>list.som
 function viewGuide(){return '<div class="card"><h2>먼저 알아둘 것</h2><div class="prose"><ul>'+
  '<li><b>순서</b>: 1번 종목·영상 → 2번 분석 구간 → 3번 기준 길이 → 4번 추적할 점 → 5번 분석 시작. 아래 종목별 안내는 스트림라인 · 돌핀킥 · 스타트 · 중량 풀업 · CMJ · 기타 순입니다.</li>'+
  '<li><b>점은 처음 한 번만 직접 찍고</b>, 그다음부터는 앱이 영상 끝까지 따라갑니다. 점은 항상 <b>분석 구간의 첫 프레임</b>에서 찍습니다("추적할 점 찍기"를 누르면 그 프레임으로 자동 이동). 그래서 분석 구간 시작을 어디에 두느냐가 곧 마킹 자세입니다.</li>'+
- '<li><b>추적 방식</b>(4번): 골반·무릎·발목·발끝·어깨·팔꿈치·손목·머리 같은 관절은 <b>자세 인식(AI) + 무늬</b>를 고르세요. 프레임마다 자세 인식 모델이 관절을 찾고, 찍은 점 주변 무늬로 몇 픽셀만 다듬습니다. 처음 한 번 모델(약 30MB)을 받고, 무늬만 쓸 때보다 분석이 몇 배 느립니다. 바벨 끝·테이프·수모 로고처럼 무늬가 뚜렷한 물체는 <b>무늬만</b>이 빠르고 정확합니다. 무늬만 따라갈 때 뼈로 이어진 점의 길이가 크게 바뀌면 배경에 붙은 것으로 보고 다시 찾고, 그래도 못 찾은 구간은 회색 선으로 표시합니다.</li>'+
+ '<li><b>추적 방식</b>(4번): 골반·무릎·발목·발끝·어깨·팔꿈치·손목·머리 같은 관절은 <b>자세 인식(AI) + 무늬</b>를 고르세요. 프레임마다 자세 인식 모델이 관절을 찾고, 찍은 점 주변 무늬로 몇 픽셀만 다듬습니다. 처음 한 번 모델(MediaPipe Pose Landmarker Heavy, 약 30MB, 2023-04-28판을 이 사이트에 고정해 두어 바뀌지 않음)을 받고, 무늬만 쓸 때보다 분석이 몇 배 느립니다. 바벨 끝·테이프·수모 로고처럼 무늬가 뚜렷한 물체는 <b>무늬만</b>이 빠르고 정확합니다. 무늬만 따라갈 때 뼈로 이어진 점의 길이가 크게 바뀌면 배경에 붙은 것으로 보고 다시 찾고, 그래도 못 찾은 구간은 회색 선으로 표시합니다.</li>'+
  '<li><b>자세 인식 모델은 이 기기 안에서 돌아갑니다.</b> 영상·사진이 밖으로 나가지 않고 사용료도 없습니다. 모델 파일을 받아야 해서 공유 주소(GitHub Pages)에서만 되고, claude.ai 화면에서는 무늬만으로 추적합니다.</li>'+
  '<li><b>관절에 둥근 스티커</b>를 붙이고 찍는 것이 기본입니다(아래 "스티커 기준"). 점은 스티커 중심에 찍습니다. 스티커가 없으면 매번 <b>같은 옷, 같은 자리, 같은 카메라 위치</b>로 찍어야 회차끼리 비교됩니다. 점을 누른 채 손가락을 움직이면 확대경이 나오고, 손을 떼는 위치에 점이 찍힙니다.</li>'+
  '<li><b>결과 화면</b>은 세 구역입니다. <b>결과</b>(숫자·그래프), <b>측정 추가·고치기</b>(접는 목록: 점 위치 고치기, AI로 위치 확인, 종목별 시점 지정·자세 점 찍기), <b>기록 저장</b>(메모, 함께 저장할 그래프).</li>'+

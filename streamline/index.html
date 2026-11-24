@@ -519,7 +519,7 @@ function fileToPhoto(file){return new Promise((res,rej)=>{const url=URL.createOb
 
 /* ----- 자동 마킹: 공유 주소(GitHub Pages)에서 MediaPipe를 불러옴. 아티팩트 화면은 외부 모델 다운로드가 막혀 안 될 수 있음 ----- */
 const AUTO=Object.assign({lib:'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.34/vision_bundle.mjs',wasm:'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.34/wasm',
-  model:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task'},window.__AUTO||{});
+  model:new URL('../models/pose_landmarker_heavy_float16_20230428.task',location.href).href,modelId:'pose_landmarker_heavy float16 2023-04-28 (sha256 64437af8)'} /* 모델 파일은 저장소에 고정(models/README.md). Google의 latest 주소는 예고 없이 바뀔 수 있음 */,window.__AUTO||{});
 let autoP=null;
 function autoLoader(){if(autoP)return autoP;autoP=(async()=>{const V=await import(AUTO.lib),fs=await V.FilesetResolver.forVisionTasks(AUTO.wasm);
   const mk=dl=>V.PoseLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:AUTO.model,delegate:dl},runningMode:'IMAGE',numPoses:1,outputSegmentationMasks:true});
@@ -531,7 +531,7 @@ async function runAuto(){const d=S.draft,img=$('#stageImg');if(!d||d.ex||!img)re
     let mask=null;try{const m=res.segmentationMasks&&res.segmentationMasks[0];if(m){mask={w:m.width,h:m.height,data:m.getAsFloat32Array().slice()};m.close()}}catch(e){}
     const a=autoPoints(res.landmarks[0],mask,d.W,d.H,d.mode);if(S.draft!==d)return;
     remember('자동 마킹');Object.keys(a.pts).forEach(k=>d.pts[k]=a.pts[k]);d.auto=Object.keys(a.pts);
-    d.autoRaw={pts:JSON.parse(JSON.stringify(a.pts)),front:a.front,side:a.side,vis:a.vis,model:'pose_landmarker_heavy',lib:'tasks-vision@0.10.34',at:Date.now()};
+    d.autoRaw={pts:JSON.parse(JSON.stringify(a.pts)),front:a.front,side:a.side,vis:a.vis,model:AUTO.modelId||'pose_landmarker_heavy',lib:'tasks-vision@0.10.34',at:Date.now()};
     const fr=d.front&&d.front!==a.front;if(!d.front)d.front=a.front;
     const low=Object.keys(a.vis).filter(k=>a.vis[k]<0.6).map(k=>PNAME[k]);
     S.autoMsg='자동 초안 '+d.auto.length+'점을 찍었습니다. 점 이름을 눌러 확대경으로 위치를 확인하고 끌어서 고치세요. 고친 점은 표시가 ✓로 바뀝니다.'+(low.length?' 특히 <b>'+low.join(', ')+'</b>은(는) 모델 확신도가 낮습니다.':'')+(a.contour?'':' 몸 윤곽을 찾지 못해 등·허리·엉덩이·갈비 점은 비워 두었습니다.')+(d.pts.finger?'':' 손끝은 자동으로 찍지 않습니다.')+(fr?' 고르신 배 방향이 자동 판단과 다릅니다. 확인해 주세요.':'');
