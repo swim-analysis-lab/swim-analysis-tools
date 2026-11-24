@@ -707,10 +707,10 @@ const SLK=[['hand','손끝'],['ear','머리(귀)'],['shoulder','어깨'],['hip',
 const SLH={hand:'앞으로 뻗은 손의 가장 앞 끝(가운뎃손가락 끝)',ear:'귀 구멍 근처. 팔에 가려 안 보이면 머리 옆면 가운데',shoulder:'어깨 관절(위팔이 시작되는 둥근 부분 가운데)',hip:'골반 옆(허벅지 맨 위 바깥쪽 뼈), 수영복 옆면 가운데',knee:'무릎 옆면 가운데',ankle:'바깥 복사뼈'};
 const slPts=P=>{const o={};Object.keys(P||{}).forEach(k=>{const q=P[k];if(q)o[k]={x:q[0],y:q[1]}});return o};
 const winOf=()=>SPORT[V.sport].win||(V.sport==='cmj'?.03:.06);
-/* 돌핀 주 추적점: 발등(기본, 자세 인식의 발끝 점 31·32에 붙여 발과 함께 돎) 또는 발목(바깥 복사뼈). 물속에서 발목 윤곽을 찍으면 자세 인식 발목점이 발끝 쪽으로 미끄러지는 일이 있어 발등을 기본으로 */
+/* 돌핀 주 추적점: 발등(기본) 또는 발목(바깥 복사뼈). 둘 다 자세 인식 발목점(27·28)에 붙여 따라감. 발등 클릭이 물속 발목 윤곽보다 덜 놓침(사용자 시험). 발끝점(31·32)에 붙이는 방식은 11-24 시험에서 더 나빠 되돌림 */
 const dkFoot=()=>V.sport==='dolphin'&&V.dkMain!=='ankle';
 const mainName=()=>dkFoot()?'발등':SPORT[V.sport].main;
-const mainTip=()=>dkFoot()?'<b>발등</b>: 발목과 발가락 사이 발등 가운데(신발 끈 자리). 물속에서도 윤곽이 뚜렷하고, 발과 함께 돌아 발목보다 덜 미끄러집니다. 진폭은 발목보다 크게 나오니 같은 점끼리 비교하세요.':SPORT[V.sport].tgt;
+const mainTip=()=>dkFoot()?'<b>발등</b>: 발목과 발가락 사이 발등 가운데(신발 끈 자리). 물속에서 발목 윤곽보다 뚜렷해 덜 놓칩니다(자세 인식 발목점에 붙여 따라감). 진폭은 발목보다 크게 나오니 같은 점끼리 비교하세요.':SPORT[V.sport].tgt;
 /* 지금 쓰는 추적 구성. 돌핀을 발등으로 따라가며 무릎 각을 재면, 발목 점을 따로 추가해 무릎 각은 골반–무릎–발목으로(발등을 쓰면 발목 굽힘이 섞임) */
 function curPreset(){const P=PRESET[V.preset];if(!(dkFoot()&&P.ang.some(a=>a.pts.includes('main'))))return P;
   return Object.assign({},P,{pts:P.pts.concat([['ankle','발목']]),ang:P.ang.map(a=>Object.assign({},a,{pts:a.pts.map(k=>k==='main'?'ankle':k)})),bones:P.bones.map(b=>b.map(k=>k==='main'?'ankle':k)).concat([['ankle','main']])})}
@@ -875,7 +875,7 @@ let poseP=null,poseTs=0;
 function poseLoader(){if(poseP)return poseP;poseP=(async()=>{const M=await import(POSE.lib),fs=await M.FilesetResolver.forVisionTasks(POSE.wasm);
   const mk=dl=>M.PoseLandmarker.createFromOptions(fs,{baseOptions:{modelAssetPath:POSE.model,delegate:dl},runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.4,minPosePresenceConfidence:.4,minTrackingConfidence:.4});
   try{return await mk('GPU')}catch(e){return await mk('CPU')}})();poseP.catch(()=>{poseP=null});return poseP}
-const poseIdx=k=>k==='main'?(dkFoot()?[31,32]:SPORT[V.sport].pmain):PMAP[k]||null;
+const poseIdx=k=>k==='main'?SPORT[V.sport].pmain:PMAP[k]||null; /* 발등도 자세 인식 발목점(27·28)에 붙임: 발끝점(31·32)은 물속에서 더 흔들려 11-24 시험에서 더 나빴음 */
 /* 자세 인식 입력은 정사각형 캔버스(가운데 정렬, rot만큼 90°씩 돌림): 가로로 긴 화면을 그대로 넣으면 누운 몸의 관절 좌표가 틀어짐
    (MediaPipe 경고 'NORM_RECT … only supported for the square ROI'). 돌린 그림에서 찾은 좌표는 원래 화면 좌표로 되돌림 */
 let poseQ=null;
@@ -917,7 +917,7 @@ async function poseCheck(){if(V.busy||V.aiBusy||!V.has)return;const keys=trkList
 /* AI가 준 위치 걸러내기: ① 모델 확신(가시성) ② 뼈 길이가 이 영상 추적의 평소 길이와 맞는지 ③ 지금 추적 위치와 거리.
    ③만 크고 ①②가 괜찮으면 추적이 틀렸을 가능성 → '고칠 후보'. ①이나 ②가 나쁘면 AI가 틀렸을 가능성 → '믿지 않음' */
 const BONES=[['hip','knee'],['knee','ankle'],['ankle','toe'],['ankle','heel'],['shoulder','elbow'],['elbow','wrist'],['shoulder','hip']];
-function aiAlias(k){if(k!=='main')return k;const m=poseIdx('main');if(m&&m[0]===31)return 'toe';return m&&m[0]===23?'hip':m&&m[0]===27?'ankle':null}
+function aiAlias(k){if(k!=='main')return k;const m=poseIdx('main');return m&&m[0]===23?'hip':m&&m[0]===27?'ankle':null}
 function aiJudge(A){const tr=V.track,out={};if(!A)return out;const keys=Object.keys(A.pts),byA={};keys.forEach(k=>{const a=aiAlias(k);if(a)byA[a]=k});
   const tk=a=>byA[a]||(trkList().some(p=>p[0]===a)?a:null),boneRef={};
   if(tr&&tr.t.length>3)BONES.forEach(([a,b])=>{const ka=tk(a),kb=tk(b);if(!ka||!kb)return;const L=[];for(let i=0;i<tr.t.length;i+=Math.max(1,Math.floor(tr.t.length/40))){const p=trackAt(tr.t[i],ka),q=trackAt(tr.t[i],kb);if(p&&q)L.push(Math.hypot(p.x-q.x,p.y-q.y))}if(L.length>=3)boneRef[a+'-'+b]=median(L)});
@@ -1620,7 +1620,7 @@ function viewGuide(){const D=(id,t,ts,body,open)=>'<details class="tool gd" data
   H('결과 보기')+L(['<b>감속 계수 k</b> 작을수록 좋음, <b>절반 속도 거리</b> 길수록 좋음. 시작 속도가 달라도 k는 거의 그대로라 날짜 비교에 좋음','<b>일직선 편차</b>: 손끝–발목 선에서 어깨·골반·무릎이 벗어난 정도','<b>어깨·골반·무릎 각</b>: 180°에 가까울수록 곧게 편 것. 어깨 가동 범위 자체는 스트림라인 자세 분석 앱(지상 사진)이 더 정확']))+
  D('dk','돌핀킥 (수중)','템포·킥당 전진·각도',
   H('찍기')+L(['물속 옆, 선수와 같은 깊이. 물 밖에서 찍으면 횟수·템포만 믿을 만함','킥 3회 + 몸 전체 = 화면 가로 <b>4~4.5m</b> → 기본 렌즈로 약 <b>4m</b> 거리(초광각은 2.5~3m, 가장자리 왜곡)','멀리 못 두면 <b>선수와 나란히 따라가며</b> 촬영(같은 깊이·거리 유지) → 속도는 빠지고 나머지는 잼','발목·골반에 밝은 방수 테이프(스티커 기준 색)','<b>글라이드 → 킥 전환</b>까지 보려면 벽을 민 직후부터 첫 킥 2~3회까지 한 영상에(고정 카메라 4m 이상). 글라이드만 자세히는 "스트림라인"으로'])+
-  H('앱 설정')+R([['1번','종목 "돌핀킥 (수중)"'],['2번','<b>시작</b> = 첫 킥 시작 프레임(점이 모두 화면 안). <b>끝</b> = <b>발목</b>이 화면 끝에 닿기 직전. 어깨·골반이 먼저 나가도 됨'],['3번','선수와 같은 거리의 아는 길이, 없으면 손끝–발끝 + 스트림라인 길이. 바닥 선은 멀어서 값이 작게 나옴'],['4번','<b>주 추적점</b>: 발등(권장, 발과 함께 돌아 덜 미끄러짐) 또는 발목. 무릎 각을 재면 발목 점이 자동으로 추가됨. <b>속도가 목적</b>: "속도 분석 — 발목 + 골반"(고정 카메라). <b>자세가 목적</b>: "각도 분석 — + 무릎·어깨", 어깨 각까지면 "+ 손목"(따라가며 찍은 영상 권장). 두 경우 모두 골반을 찍으므로 킥별 속도는 항상 나옴. 방식 "자세 인식(AI) + 무늬". 따라가며 찍었으면 "카메라가 선수를 따라 움직임" 켜기'],['5번 후','오른쪽 위 "킥 n/N"이 실제 킥과 맞는지 확인. 어긋난 점은 <b>점 위치 고치기</b>, 특정 순간 자세는 <b>한 프레임 자세 (각도)</b>']])+
+  H('앱 설정')+R([['1번','종목 "돌핀킥 (수중)"'],['2번','<b>시작</b> = 첫 킥 시작 프레임(점이 모두 화면 안). <b>끝</b> = <b>발목</b>이 화면 끝에 닿기 직전. 어깨·골반이 먼저 나가도 됨'],['3번','선수와 같은 거리의 아는 길이, 없으면 손끝–발끝 + 스트림라인 길이. 바닥 선은 멀어서 값이 작게 나옴'],['4번','<b>주 추적점</b>: 발등(권장, 물속 윤곽이 뚜렷해 덜 놓침) 또는 발목. 무릎 각을 재면 발목 점이 자동으로 추가됨. <b>속도가 목적</b>: "속도 분석 — 발목 + 골반"(고정 카메라). <b>자세가 목적</b>: "각도 분석 — + 무릎·어깨", 어깨 각까지면 "+ 손목"(따라가며 찍은 영상 권장). 두 경우 모두 골반을 찍으므로 킥별 속도는 항상 나옴. 방식 "자세 인식(AI) + 무늬". 따라가며 찍었으면 "카메라가 선수를 따라 움직임" 켜기'],['5번 후','오른쪽 위 "킥 n/N"이 실제 킥과 맞는지 확인. 어긋난 점은 <b>점 위치 고치기</b>, 특정 순간 자세는 <b>한 프레임 자세 (각도)</b>']])+
   H('결과 보기')+L(['<b>킥 템포</b>와 <b>킥당 전진</b>을 함께: 템포가 같아도 킥당 전진이 길면 더 효율적','진폭이 너무 크면 저항이 늘어 속도가 떨어질 수 있음','<b>무릎 최소 각</b>(다운킥 직전 굽힘), <b>어깨 각</b>(180°면 팔–몸통 일직선), <b>어깨 각 흔들림</b>(작을수록 팔 고정)','각도는 "다 보인 킥 m/N회"로 잰 값. 골반이 나간 뒤 진폭·속도는 참고값','<b>글라이드 → 킥 전환</b>: 글라이드 감속 곡선이 내 돌핀 평균 속도까지 떨어지는 시점 = 권장 킥 시작. 실제 첫 킥이 그보다 이르면 "일찍", 늦으면 "늦게"']))+
  D('st','수영 스타트','입수 거리·비행 시간',
   H('찍기')+L(['출발대 옆 풀사이드, 레인과 직각, 수면보다 조금 높게 고정','출발대 → 입수(약 4m), 브레이크아웃까지면 15m까지 화면에','<b>120fps 이상</b>(30fps면 비행 시간 ±0.03초)','5m 표시가 보이게, 출발 불빛·신호음이 들어가게 미리 촬영 시작'])+
