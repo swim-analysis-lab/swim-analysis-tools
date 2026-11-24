@@ -708,9 +708,9 @@ const SLH={hand:'앞으로 뻗은 손의 가장 앞 끝(가운뎃손가락 끝)'
 const slPts=P=>{const o={};Object.keys(P||{}).forEach(k=>{const q=P[k];if(q)o[k]={x:q[0],y:q[1]}});return o};
 const winOf=()=>SPORT[V.sport].win||(V.sport==='cmj'?.03:.06);
 /* 돌핀 주 추적점: 발등(기본) 또는 발목(바깥 복사뼈). 둘 다 자세 인식 발목점(27·28)에 붙여 따라감. 발등 클릭이 물속 발목 윤곽보다 덜 놓침(사용자 시험). 발끝점(31·32)에 붙이는 방식은 11-24 시험에서 더 나빠 되돌림 */
-const dkFoot=()=>false; /* 11-24: 공유 앱이라 기준을 하나로 → 돌핀 주 추적점은 '발목(바깥 복사뼈)'으로 통일. 발등 선택은 없앰(옛 기록의 mainPt:'foot' 표시만 남김) */
+const dkFoot=()=>V.sport==='dolphin'; /* 11-24 사용자 결정: 공유 앱이라 기준 하나 → 돌핀 주 추적점은 '발등'으로 통일(찍는 자리 = 발등, 따라가는 기준 = 자세 인식 발목점·정강이 방향). 발목 기준은 물속에서 덜 따라가 사용자 시험에서 아쉬웠음 */
 const mainName=()=>dkFoot()?'발등':SPORT[V.sport].main;
-const mainTip=()=>dkFoot()?'<b>발등</b>: 발목과 발가락 사이 발등 가운데(신발 끈 자리). 물속에서 발목 윤곽보다 뚜렷해 덜 놓칩니다(자세 인식 발목점에 붙여 따라감). 진폭은 발목보다 크게 나오니 같은 점끼리 비교하세요.':SPORT[V.sport].tgt;
+const mainTip=()=>dkFoot()?'<b>발등</b>: 발목과 발가락 사이 발등 가운데(신발 끈 자리)를 찍습니다. 물속에서 윤곽이 뚜렷해 덜 놓치고, 자세 인식 발목점에 붙여 따라갑니다. 발목 복사뼈·발끝·윤곽은 찍지 않습니다(기준이 달라져 진폭·속도를 비교할 수 없음). 진폭은 발목보다 크게 나오니 같은 점끼리 비교하세요.':SPORT[V.sport].tgt;
 /* 지금 쓰는 추적 구성. 돌핀을 발등으로 따라가며 무릎 각을 재면, 발목 점을 따로 추가해 무릎 각은 골반–무릎–발목으로(발등을 쓰면 발목 굽힘이 섞임) */
 function curPreset(){const P=PRESET[V.preset];if(!(dkFoot()&&P.ang.some(a=>a.pts.includes('main'))))return P;
   return Object.assign({},P,{pts:P.pts.concat([['ankle','발목']]),ang:P.ang.map(a=>Object.assign({},a,{pts:a.pts.map(k=>k==='main'?'ankle':k)})),bones:P.bones.map(b=>b.map(k=>k==='main'?'ankle':k)).concat([['ankle','main']])})}
@@ -839,7 +839,7 @@ function fixBarHTML(){if(!V.has||V.busy||!V.track)return '';const n=V.fixes.leng
     (n?'<button class="btn primary sm" type="button" id="fixApply2">고친 점 반영해 다시 추적</button>':'')+(on?'<button class="btn sm" type="button" id="fixBtn2">고치기 끝내기</button>':'')+'</div>'+
     '<p class="small muted" style="margin:4px 0 0">← → 1프레임 · Shift + ← → 10프레임</p>'}
 /* 찍은 점(분석 구간 첫 프레임)을 자세 인식 모델이 찾은 관절 중심으로 옮김. 사람마다 찍는 자리가 달라지는 것을 줄이고, 추적이 붙는 기준(모델 관절)과 찍은 점을 일치시킴 */
-async function snapPts(){if(V.busy||V.aiBusy||!V.has)return;const pts=ptList().filter(p=>!isFixed(p[0])&&poseIdx(p[0])&&ptPos(p[0]));if(!pts.length){toast('맞출 수 있는 관절 점이 없습니다.');return}
+async function snapPts(){if(V.busy||V.aiBusy||!V.has)return;const pts=ptList().filter(p=>!isFixed(p[0])&&poseIdx(p[0])&&ptPos(p[0])&&!(p[0]==='main'&&dkFoot()));if(!pts.length){toast('맞출 수 있는 관절 점이 없습니다.');return}
   stopPlay();V.aiBusy=true;V.prog='(자세 인식 모델 준비 중)';uiState();let pl=null;try{pl=await poseLoader()}catch(e){}
   if(!pl){V.aiBusy=false;V.prog='';render();toast('자세 인식 모델을 불러오지 못했습니다. 공유 주소(GitHub Pages)에서 해 주세요.');return}
   await setCur(V.t0);grab();const ref=pts.map(p=>{const q=ptPos(p[0]);return {ids:poseIdx(p[0]),x:q[0],y:q[1]}}),gate=.25*Math.max(V.cw,V.ch),lim=.08*Math.hypot(V.cw,V.ch);let L=null;
@@ -912,7 +912,7 @@ function parseAIPoints(txt,keys){if(typeof txt!=='string')return null;const m=tx
 const aiSrc=()=>LS.get('mv_aisrc','pose');
 /* 자세 인식 모델로 현재 프레임 확인: 추적할 때 쓰는 MediaPipe를 이 한 장에만 돌림. 무료·키 없음·사진이 기기 밖으로 나가지 않음.
    몸을 뒤집어(머리↔발) 찾았거나 다른 사람을 찾았으면 다른 회전으로 다시 시도. 왼·오른쪽은 카메라 쪽(가시성 큰 쪽) 관절 */
-async function poseCheck(){if(V.busy||V.aiBusy||!V.has)return;const keys=trkList().map(p=>p[0]).filter(k=>poseIdx(k));
+async function poseCheck(){if(V.busy||V.aiBusy||!V.has)return;const keys=trkList().map(p=>p[0]).filter(k=>poseIdx(k)&&!(k==='main'&&dkFoot()));
   if(!keys.length){V.aiMsg='이 추적 구성의 점은 자세 인식 모델이 찾는 관절이 아닙니다.';render();return}
   V.aiBusy=true;V.aiMsg='자세 인식 모델을 준비하는 중입니다(처음 한 번 약 30MB)…';render();const t=V.cur;
   try{let pl=null;try{pl=await poseLoader()}catch(e){}
@@ -1216,7 +1216,7 @@ function bindStage(){const st=$('#stage');if(!st)return;let down=false;
 const CH={L:40,R:12,W:380,tmax:0};
 /* 종목별 핵심 그래프(처음 보여 줄 그래프)와 읽는 법 */
 const WTIP={streamline:'<b>시작</b>: 벽을 민 뒤 골반이 화면에 들어온 프레임. <b>끝</b>: 첫 킥 직전(또는 골반이 화면을 벗어나기 직전).',
-  dolphin:'<b>시작</b>: 킥만 보려면 첫 킥 시작 프레임, <b>글라이드 → 킥 전환</b>까지 보려면 벽을 민 직후(발이 벽에서 떨어진 뒤). <b>끝</b>: 발목이 화면 끝에 닿기 직전. 자세·각도가 목적이면 따라가며 찍은 영상이 좋습니다.',
+  dolphin:'<b>시작</b>: 킥만 보려면 첫 킥 시작 프레임, <b>글라이드 → 킥 전환</b>까지 보려면 벽을 민 직후(발이 벽에서 떨어진 뒤). <b>끝</b>: 발등이 화면 끝에 닿기 직전. 자세·각도가 목적이면 따라가며 찍은 영상이 좋습니다.',
   start:'<b>시작</b>: 출발대 위 준비 자세로 멈춘 프레임(발이 0.15초 이상 붙어 있게). <b>끝</b>: 브레이크아웃 뒤, 또는 입수 1초 뒤.',
   pullup:'<b>시작</b>: 첫 반복 직전 팔을 다 펴고 매달려 멈춘 프레임. <b>끝</b>: 마지막 반복 후 팔이 다 펴진 뒤.',
   cmj:'<b>시작</b>: 가만히 선 구간 안, 무릎이 굽기 약 0.5초 전. <b>끝</b>: 착지 후 약 0.5초.',
@@ -1459,7 +1459,7 @@ function recMetrics(){const r=V.res,R=V.rep,rd=v=>v==null||!isFinite(v)?null:Mat
   if(V.sport==='streamline'&&R&&!R.short&&R.k!=null){const r1=v=>v==null||!isFinite(v)?null:Math.round(v*10)/10,r4=v=>v==null||!isFinite(v)?null:Math.round(v*1e4)/1e4;
     o.sl={vA:rd(R.vA),vB:rd(R.vB),gT:rd(R.T),dist:rd(R.dist),loss:r1(R.loss),k:r4(R.k),halfD:rd(R.halfD),r2:rd(R.r2),dY:rd(R.dY),src:R.src};
     const S=R.pose;if(S)o.sl.pose={tilt:r1(S.tilt),rms:r4(S.rms),rmsM:rd(S.rmsM),dEar:S.dev.ear!=null?rd(S.dev.ear):null,dSh:rd(S.dev.shoulder),dHip:rd(S.dev.hip),dKnee:rd(S.dev.knee),rHip:r4(S.rel.hip),aSh:S.ang.sh==null?null:Math.round(S.ang.sh),aHip:S.ang.hip==null?null:Math.round(S.ang.hip),aKnee:S.ang.knee==null?null:Math.round(S.ang.knee),worst:S.worst}}
-  if(V.sport==='dolphin'&&R&&R.n>=2)o.dk={n:R.n,f:rd(R.f),amp:rd(R.amp),v:rd(R.v),dpk:rd(R.dpk),ratio:rd(R.ratio),vDown:rd(R.vDown),gl:R.gk&&!R.gk.short?{k:+R.gk.G.k.toFixed(4),vAt:rd(R.gk.vAt),tStar:rd(R.gk.tStar),dt:rd(R.gk.dt),dd:rd(R.gk.dd)}:undefined,pan:R.pan||undefined,mainPt:V.track&&V.track.sil?'toe':'ankle',knee:R.knee==null?null:Math.round(R.knee),hipR:R.hipR==null?null:Math.round(R.hipR),sh:R.sh==null?null:Math.round(R.sh),shR:R.shR==null?null:Math.round(R.shR),rel:R.rel};
+  if(V.sport==='dolphin'&&R&&R.n>=2)o.dk={n:R.n,f:rd(R.f),amp:rd(R.amp),v:rd(R.v),dpk:rd(R.dpk),ratio:rd(R.ratio),vDown:rd(R.vDown),gl:R.gk&&!R.gk.short?{k:+R.gk.G.k.toFixed(4),vAt:rd(R.gk.vAt),tStar:rd(R.gk.tStar),dt:rd(R.gk.dt),dd:rd(R.gk.dd)}:undefined,pan:R.pan||undefined,mainPt:V.track&&V.track.sil?'toe':(dkFoot()?'foot':'ankle'),knee:R.knee==null?null:Math.round(R.knee),hipR:R.hipR==null?null:Math.round(R.hipR),sh:R.sh==null?null:Math.round(R.sh),shR:R.shR==null?null:Math.round(R.shR),rel:R.rel};
   if(V.sport==='dolphin'&&R&&R.pose){const S=R.pose,a=v=>v==null?null:Math.round(v);o.dk=o.dk||{};o.dk.pose={t:R.poseT==null?null:Math.round(R.poseT*1000)/1000,aSh:a(S.ang.sh),aHip:a(S.ang.hip),aKnee:a(S.ang.knee),tilt:Math.round(S.tilt*10)/10}}
   if(V.sport==='cmj'&&R)o.cmj={h:rd(R.h),hSrc:R.hSrc,T:rd(R.T),depth:rd(R.depth),vTo:rd(R.vTo),ttt:rd(R.ttt),rsi:rd(R.rsi),pp:R.pp==null?null:Math.round(R.pp),sayers:R.sayers==null?null:Math.round(R.sayers),knee:R.knee==null?null:Math.round(R.knee),hDisp:rd(R.hDisp)};
   return o}
@@ -1507,7 +1507,7 @@ function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disab
     (V.sport==='dolphin'?'<label class="small" style="display:flex;gap:8px;align-items:flex-start;margin-top:4px"><input type="checkbox" id="fPan"'+(V.pan?' checked':'')+' style="margin-top:3px"><span><b>카메라가 선수를 따라 움직임</b> — 사람이 카메라를 들고(또는 장대에 달아) 선수와 나란히 이동하며 찍은 영상. 킥 횟수·템포·진폭·관절 각도는 그대로 재고, 전진 속도·킥당 전진은 카메라 움직임이 섞여 계산하지 않습니다. 배경 빼기는 끄세요.</span></label>':'')+
     '<div class="row"><button class="btn'+(V.mode==='target'?' on':'')+'" type="button" id="tgBtn"'+dis+'>추적할 점 찍기</button>'+(V.sport==='pullup'||V.sport==='start'?'<button class="btn'+(V.mode==='bar'?' on':'')+'" type="button" id="barBtn"'+dis+'>'+(V.sport==='start'?'수면 높이 찍기':'바 높이 찍기')+(V.bar?' ✓':V.sport==='start'?'':' (선택)')+'</button>':'')+'</div>'+
     '<div class="chips">'+ptList().map((p,i)=>'<button type="button" class="chip'+(ptPos(p[0])?' done':'')+(V.mode==='target'&&V.tIdx===i?' cur':'')+'" data-tpt="'+i+'"'+dis+'>'+p[1]+(ptPos(p[0])?' ✓':'')+'</button>').join('')+'</div>'+
-    '<p class="small muted">시작 시점 화면에서 찍습니다. '+mainTip()+' 각도용 점은 옷 위에서는 놓치기 쉬우니, 관절에 색 테이프를 붙이거나 무늬가 뚜렷한 곳을 고르세요. 이름을 누르면 그 점만 다시 찍습니다.</p>'+(V.has&&V.tmode==='pose'&&ptList().some(p=>poseIdx(p[0])&&ptPos(p[0]))?'<div class="row"><button class="btn sm" type="button" id="snapBtn"'+(V.busy||V.aiBusy?' disabled':'')+'>찍은 점을 AI 관절 위치로 맞추기</button><span class="small muted">스티커가 없을 때 권장. 공유 주소에서만 됩니다.</span></div>':'')+'</div></div>'+
+    '<p class="small muted">시작 시점 화면에서 찍습니다. '+mainTip()+' 각도용 점은 옷 위에서는 놓치기 쉬우니, 관절에 색 테이프를 붙이거나 무늬가 뚜렷한 곳을 고르세요. 이름을 누르면 그 점만 다시 찍습니다.</p>'+(V.has&&V.tmode==='pose'&&ptList().some(p=>poseIdx(p[0])&&ptPos(p[0])&&!(p[0]==='main'&&dkFoot()))?'<div class="row"><button class="btn sm" type="button" id="snapBtn"'+(V.busy||V.aiBusy?' disabled':'')+'>찍은 점을 AI 관절 위치로 맞추기</button><span class="small muted">스티커가 없을 때 권장. 공유 주소에서만 됩니다.</span></div>':'')+'</div></div>'+
    '<div class="step"><div class="n">5</div><div class="b"><div class="row"><button class="btn primary" type="button" id="runBtn"'+(V.has&&calOk&&tgOk&&!V.busy?'':' disabled')+'>분석 시작</button><button class="btn" type="button" id="stopBtn"'+(V.busy?'':' disabled')+'>중지</button><span class="small muted" id="runHint">'+(!V.has?'영상을 먼저 선택하세요.':!calOk?'3번 기준 길이가 필요합니다.':!tgOk?'4번 추적할 점이 필요합니다.':'')+'</span></div></div></div>'+
   '</div>'+resultsHTML()+'</div></div>'}
 function uiState(){const ub=$('#undoBtn');if(ub)ub.disabled=V.busy||!UH.u.length;const rd=$('#redoBtn');if(rd)rd.disabled=V.busy||!UH.r.length;const g=$('#guideLine');if(g)g.innerHTML=guideText();const st=$('#stage');if(st)st.classList.toggle('pick',!!V.mode&&V.has&&!V.busy);const sb=$('#stopBtn');if(sb)sb.disabled=!V.busy;const rb=$('#runBtn');if(rb&&V.busy)rb.disabled=true;const sc=$('#scrub');if(sc)sc.disabled=V.busy}
@@ -1631,7 +1631,7 @@ function viewGuide(){const D=(id,t,ts,body,open)=>'<details class="tool gd" data
   H('결과 보기')+L(['<b>감속 계수 k</b> 작을수록 좋음, <b>절반 속도 거리</b> 길수록 좋음. 시작 속도가 달라도 k는 거의 그대로라 날짜 비교에 좋음','<b>일직선 편차</b>: 손끝–발목 선에서 어깨·골반·무릎이 벗어난 정도','<b>어깨·골반·무릎 각</b>: 180°에 가까울수록 곧게 편 것. 어깨 가동 범위 자체는 스트림라인 자세 분석 앱(지상 사진)이 더 정확']))+
  D('dk','돌핀킥 (수중)','템포·킥당 전진·각도',
   H('찍기')+L(['물속 옆, 선수와 같은 깊이. 물 밖에서 찍으면 횟수·템포만 믿을 만함','킥 3회 + 몸 전체 = 화면 가로 <b>4~4.5m</b> → 기본 렌즈로 약 <b>4m</b> 거리(초광각은 2.5~3m, 가장자리 왜곡)','멀리 못 두면 <b>선수와 나란히 따라가며</b> 촬영(같은 깊이·거리 유지) → 속도는 빠지고 나머지는 잼','발목·골반에 밝은 방수 테이프(스티커 기준 색)','<b>글라이드 → 킥 전환</b>까지 보려면 벽을 민 직후부터 첫 킥 2~3회까지 한 영상에(고정 카메라 4m 이상). 글라이드만 자세히는 "스트림라인"으로'])+
-  H('앱 설정')+R([['1번','종목 "돌핀킥 (수중)"'],['2번','<b>시작</b> = 첫 킥 시작 프레임(점이 모두 화면 안). <b>끝</b> = <b>발목</b>이 화면 끝에 닿기 직전. 어깨·골반이 먼저 나가도 됨'],['3번','선수와 같은 거리의 아는 길이, 없으면 손끝–발끝 + 스트림라인 길이. 바닥 선은 멀어서 값이 작게 나옴'],['4번','<b>주 추적점은 발목(바깥 복사뼈) 하나</b>. 흰 스티커 중심을 찍고, 스티커가 없으면 대략 찍은 뒤 "찍은 점을 AI 관절 위치로 맞추기". <b>속도가 목적</b>: "속도 분석 — 발목 + 골반"(고정 카메라). <b>자세가 목적</b>: "각도 분석 — + 무릎·어깨", 어깨 각까지면 "+ 손목"(따라가며 찍은 영상 권장). 두 경우 모두 골반을 찍으므로 킥별 속도는 항상 나옴. 방식 "자세 인식(AI) + 무늬". 따라가며 찍었으면 "카메라가 선수를 따라 움직임" 켜기'],['5번 후','오른쪽 위 "킥 n/N"이 실제 킥과 맞는지 확인. 어긋난 점은 <b>점 위치 고치기</b>, 특정 순간 자세는 <b>한 프레임 자세 (각도)</b>']])+
+  H('앱 설정')+R([['1번','종목 "돌핀킥 (수중)"'],['2번','<b>시작</b> = 첫 킥 시작 프레임(점이 모두 화면 안). <b>끝</b> = <b>발등</b>이 화면 끝에 닿기 직전. 어깨·골반이 먼저 나가도 됨'],['3번','선수와 같은 거리의 아는 길이, 없으면 손끝–발끝 + 스트림라인 길이. 바닥 선은 멀어서 값이 작게 나옴'],['4번','<b>주 추적점은 발등 하나</b>(발목과 발가락 사이 가운데). 무릎 각을 재는 구성이면 발목 점이 자동 추가됨(바깥 복사뼈, 스티커 없으면 "찍은 점을 AI 관절 위치로 맞추기"). <b>속도가 목적</b>: "속도 분석 — 발목 + 골반"(고정 카메라). <b>자세가 목적</b>: "각도 분석 — + 무릎·어깨", 어깨 각까지면 "+ 손목"(따라가며 찍은 영상 권장). 두 경우 모두 골반을 찍으므로 킥별 속도는 항상 나옴. 방식 "자세 인식(AI) + 무늬". 따라가며 찍었으면 "카메라가 선수를 따라 움직임" 켜기'],['5번 후','오른쪽 위 "킥 n/N"이 실제 킥과 맞는지 확인. 어긋난 점은 <b>점 위치 고치기</b>, 특정 순간 자세는 <b>한 프레임 자세 (각도)</b>']])+
   H('결과 보기')+L(['<b>킥 템포</b>와 <b>킥당 전진</b>을 함께: 템포가 같아도 킥당 전진이 길면 더 효율적','진폭이 너무 크면 저항이 늘어 속도가 떨어질 수 있음','<b>무릎 최소 각</b>(다운킥 직전 굽힘), <b>어깨 각</b>(180°면 팔–몸통 일직선), <b>어깨 각 흔들림</b>(작을수록 팔 고정)','각도는 "다 보인 킥 m/N회"로 잰 값. 골반이 나간 뒤 진폭·속도는 참고값','<b>글라이드 → 킥 전환</b>: 글라이드 감속 곡선이 내 돌핀 평균 속도까지 떨어지는 시점 = 권장 킥 시작. 실제 첫 킥이 그보다 이르면 "일찍", 늦으면 "늦게"']))+
  D('st','수영 스타트','입수 거리·비행 시간',
   H('찍기')+L(['출발대 옆 풀사이드, 레인과 직각, 수면보다 조금 높게 고정','출발대 → 입수(약 4m), 브레이크아웃까지면 15m까지 화면에','<b>120fps 이상</b>(30fps면 비행 시간 ±0.03초)','5m 표시가 보이게, 출발 불빛·신호음이 들어가게 미리 촬영 시작'])+
