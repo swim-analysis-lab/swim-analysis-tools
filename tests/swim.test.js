@@ -1,7 +1,7 @@
 // 수영 스타트·돌핀킥 분석 시험 (합성 궤적)
 const fs=require('fs'),path=require('path');const html=fs.readFileSync(path.join(__dirname,'../motion/index.html'),'utf8');
 const core=html.match(/<script id="core">([\s\S]*?)<\/script>/)[1];const c={};
-new Function('c',core+';Object.assign(c,{analyze,startReport,dolphinReport,extrema,flightFromBand,G,angleSeries})')(c);
+new Function('c',core+';Object.assign(c,{analyze,startReport,dolphinReport,extrema,flightFromBand,G,angleSeries,glideKick})')(c);
 let fail=0;const near=(n,a,b,tol)=>{const ok=a!=null&&Math.abs(a-b)<=tol;if(!ok)fail++;console.log((ok?'ok  ':'FAIL')+' '+n+': '+(a==null?a:+a.toFixed(4))+' vs '+(+b.toFixed(4))+' (±'+tol+')')};
 const herm=(t,t0,t1,y0,y1,v0,v1)=>{const d=t1-t0,u=(t-t0)/d;return (2*u**3-3*u**2+1)*y0+(u**3-2*u**2+u)*d*v0+(-2*u**3+3*u**2)*y1+(u**3-u**2)*d*v1};
 let seed=5;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647-.5};
@@ -60,4 +60,12 @@ for(const [fsv,noise,f,A,v,dur,df] of [[60,0,2.2,.45,1.8,3,.45],[30,.5,2.2,.45,1
 {const tr={t:[],x:[],y:[],c:[],P:{a:{x:[],y:[],c:[]},b:{x:[],y:[],c:[]}}};for(let i=0;i<=60;i++){const t=i/60;tr.t.push(t);tr.x.push(200);tr.y.push(300);tr.c.push(1);tr.P.b.x.push(200);tr.P.b.y.push(200);tr.P.b.c.push(1);
     const out=i>40;tr.P.a.x.push(out?404:300);tr.P.a.y.push(out?120:200);tr.P.a.c.push(1)}
   const A=c.angleSeries(tr,[{n:'x',pts:['a','b','main']}],1,60,.04,405,720)[0];near('angle masked min',A.min,90,1);near('angle coverage',A.cov,37/61,.06)}
+// 글라이드(1초, v0 2.6, k 0.25) 뒤 돌핀(평균 1.8 m/s): 권장 킥 시작 = (1/1.8−1/2.6)/0.25 ≈ 0.684초 → 실제 1.0초 시작은 약 0.32초 늦음
+{const fsv=120,px=120,v0=2.6,k=.25,tk=1,f=2.2,A=.45,tr={t:[],x:[],y:[],c:[],P:{hip:{x:[],y:[],c:[]}}},Xg=t=>Math.log(1+k*v0*t)/k;
+  for(let i=0;i<=3.2*fsv;i++){const t=i/fsv,hx=t<tk?Xg(t):Xg(tk)+1.8*(t-tk)+.02*Math.sin(2*Math.PI*f*(t-tk)),hy=-.6,ph=t<tk?0:(t-tk)*f,s=t<tk?0:A/2*(1-Math.cos(2*Math.PI*ph));
+    tr.t.push(t);tr.x.push(100+(hx-.95)*px);tr.y.push(400-(hy+s)*px);tr.c.push(1);tr.P.hip.x.push(100+hx*px);tr.P.hip.y.push(400-hy*px);tr.P.hip.c.push(1)}
+  const r=c.analyze(tr,{pxPerM:px,slow:1,rate:fsv,win:.04}),hr=c.analyze({t:tr.t,x:tr.P.hip.x,y:tr.P.hip.y,c:tr.P.hip.c},{pxPerM:px,slow:1,rate:fsv,win:.04});
+  const R=c.dolphinReport(r,{hip:hr,hipOff:{dx:-.95,dy:0}}),Gk=c.glideKick(hr,R,{});
+  console.log('glide→kick',Gk&&{k:Gk.G&&Gk.G.k,tB:Gk.tB,tK:Gk.tK,vK:Gk.vK,tStar:Gk.tStar,dt:Gk.dt});
+  near('glide k',Gk.G.k,.25,.03);near('glide end',Gk.tB,.95,.06);near('dolphin avg',Gk.vK,1.8,.06);near('kick start late by',Gk.dt,.32,.1)}
 console.log(fail?fail+' FAILED':'ALL PASS');process.exit(fail?1:0)
