@@ -1,7 +1,7 @@
 // 수영 스타트·돌핀킥 분석 시험 (합성 궤적)
 const fs=require('fs'),path=require('path');const html=fs.readFileSync(path.join(__dirname,'../motion/index.html'),'utf8');
 const core=html.match(/<script id="core">([\s\S]*?)<\/script>/)[1];const c={};
-new Function('c',core+';Object.assign(c,{analyze,startReport,dolphinReport,extrema,flightFromBand,G})')(c);
+new Function('c',core+';Object.assign(c,{analyze,startReport,dolphinReport,extrema,flightFromBand,G,angleSeries})')(c);
 let fail=0;const near=(n,a,b,tol)=>{const ok=a!=null&&Math.abs(a-b)<=tol;if(!ok)fail++;console.log((ok?'ok  ':'FAIL')+' '+n+': '+(a==null?a:+a.toFixed(4))+' vs '+(+b.toFixed(4))+' (±'+tol+')')};
 const herm=(t,t0,t1,y0,y1,v0,v1)=>{const d=t1-t0,u=(t-t0)/d;return (2*u**3-3*u**2+1)*y0+(u**3-2*u**2+u)*d*v0+(-2*u**3+3*u**2)*y1+(u**3-u**2)*d*v1};
 let seed=5;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647-.5};
@@ -49,4 +49,15 @@ for(const [fsv,noise,f,A,v,dur,df] of [[60,0,2.2,.45,1.8,3,.45],[30,.5,2.2,.45,1
   near(' kick count fs'+fsv+' f'+f,R.n,expN,1);near(' tempo',R.f,f,.03*f);near(' amplitude',R.amp,A,fsv<=30?.06:.035);near(' forward speed',R.v,v,.05);near(' distance per kick',R.dpk,v/f,.05);near(' down share',R.ratio,df,fsv<=30?.08:.05)}
 // 골반 없이 발목만: 템포·횟수는 맞아야 함
 {const {tr,px}=dk(60,.5,2.2,.45,1.8,3,.45);const r=c.analyze(tr,{pxPerM:px,slow:1,rate:60,win:.04}),R=c.dolphinReport(r,{});near('ankle only tempo',R.f,2.2,.07);near('ankle only count',R.n,6,1)}
+// 골반이 중간에 화면 밖으로 나감(추적이 가장자리에 붙어 멈춤): 킥 횟수·템포·진폭은 그대로, 전진 속도는 발목으로 이어서
+{const {tr,px}=dk(60,.5,2.2,.45,1.8,3,.45),n0=tr.t.length,cut=Math.round(n0*.55),edge=tr.P.hip.x[cut],ey=tr.P.hip.y[cut];for(let i=cut;i<n0;i++){tr.P.hip.x[i]=edge;tr.P.hip.y[i]=ey}
+  const r=c.analyze(tr,{pxPerM:px,slow:1,rate:60,win:.04}),hr=c.analyze({t:tr.t,x:tr.P.hip.x,y:tr.P.hip.y,c:tr.P.hip.c},{pxPerM:px,slow:1,rate:60,win:.04}),n=r.t.length,hipOk=r.t.map(t=>t<tr.t[cut]-.02);
+  const R=c.dolphinReport(r,{hip:hr,hipOff:{dx:(tr.P.hip.x[0]-tr.x[0])/px,dy:-(tr.P.hip.y[0]-tr.y[0])/px},hipOk});
+  console.log('hip leaves at',tr.t[cut].toFixed(2),'n',R.n,'f',R.f&&R.f.toFixed(3),'amp',R.amp.toFixed(3),'v',R.v&&R.v.toFixed(3),'hipOutT',R.hipOutT);
+  near('hip leaves: count',R.n,6,1);near('hip leaves: tempo',R.f,2.2,.07);near('hip leaves: amplitude',R.amp,.45,.06);near('hip leaves: speed',R.v,1.8,.12);if(!R.hipPart){fail++;console.log('FAIL hipPart flag')}
+  const Rp=c.dolphinReport(r,{hip:hr,hipOff:{dx:0,dy:-(tr.P.hip.y[0]-tr.y[0])/px},hipOk,pan:true});if(Rp.v!=null||Rp.dpk!=null){fail++;console.log('FAIL pan should hide speed')}else console.log('ok   pan hides speed')}
+// 각도: 세 점 중 하나가 화면 밖이면 그 프레임은 각도에서 뺌
+{const tr={t:[],x:[],y:[],c:[],P:{a:{x:[],y:[],c:[]},b:{x:[],y:[],c:[]}}};for(let i=0;i<=60;i++){const t=i/60;tr.t.push(t);tr.x.push(200);tr.y.push(300);tr.c.push(1);tr.P.b.x.push(200);tr.P.b.y.push(200);tr.P.b.c.push(1);
+    const out=i>40;tr.P.a.x.push(out?404:300);tr.P.a.y.push(out?120:200);tr.P.a.c.push(1)}
+  const A=c.angleSeries(tr,[{n:'x',pts:['a','b','main']}],1,60,.04,405,720)[0];near('angle masked min',A.min,90,1);near('angle coverage',A.cov,37/61,.06)}
 console.log(fail?fail+' FAILED':'ALL PASS');process.exit(fail?1:0)
