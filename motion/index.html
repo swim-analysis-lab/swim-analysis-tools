@@ -185,6 +185,7 @@ details.tool .ts{margin-left:auto;color:var(--muted);font-size:12.5px;text-align
 details.tool .tb{display:flex;flex-direction:column;gap:12px;padding:0 2px 18px}
 details.tool .tb>*{margin-top:0}
 #saveCard .field{margin-top:2px}
+.cmprecs{flex-direction:column;align-items:stretch}.cmprecs .field{flex:none;width:100%}
 </style>
 </head>
 <body>
@@ -1408,10 +1409,12 @@ function viewRecords(){const all=S.recs.slice().sort((a,b)=>a.created<b.created?
 function cmpHTML(list,sp){const C=S.cmp[sp]||(S.cmp[sp]={k:null,a:null,b:null,c:'',al:'start'});
   const keys=Object.keys(CDEF).filter(k=>list.some(r=>recChart(r,k)));if(!keys.length)return '';if(!keys.includes(C.k))C.k=keys.includes('vx')&&SPORT[sp].swim?'vx':keys.includes('vy')?'vy':keys[0];
   const ok=list.filter(r=>recChart(r,C.k));if(!ok.find(r=>r.id===C.a))C.a=ok[1]?ok[1].id:ok[0].id;if(!ok.find(r=>r.id===C.b))C.b=ok[0].id;if(C.c&&!ok.find(r=>r.id===C.c))C.c='';
-  const lab=r=>esc(r.date)+(r.note?' · '+esc(r.note.slice(0,16)):'')+(r.mass?' · '+r.mass+'kg':''),opt=(sel,none)=>(none?'<option value="">없음</option>':'')+ok.map(r=>'<option value="'+r.id+'"'+(r.id===sel?' selected':'')+'>'+lab(r)+'</option>').join('');
+  /* 이름표: 메모(없으면 '기타'의 동작 이름)를 맨 앞에 두어 좁은 칸에서도 구분되게. 같은 날짜가 여럿이면 저장 시각을 붙임 */
+  const sameDay=d=>ok.filter(x=>x.date===d).length>1,hm=t=>{const d=new Date(t);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')},
+    lab=r=>{const head=r.note||(r.sport==='free'&&r.name?r.name:''),d=r.date.slice(5).replace('-','.')+(sameDay(r.date)&&r.created>1e12?' '+hm(r.created):'');return esc((head?head.slice(0,24)+' · ':'')+d+(r.mass?' · '+r.mass+'kg':''))},opt=(sel,none)=>(none?'<option value="">없음</option>':'')+ok.map(r=>'<option value="'+r.id+'"'+(r.id===sel?' selected':'')+'>'+lab(r)+'</option>').join('');
   let h='<h3>그래프 비교</h3><div class="row"><div class="field"><label for="cmpK">그래프</label><select id="cmpK">'+keys.map(k=>'<option value="'+k+'"'+(k===C.k?' selected':'')+'>'+CDEF[k][0]+'</option>').join('')+'</select></div>'+
     '<div class="field"><label for="cmpAl">시간 맞추기</label><select id="cmpAl"><option value="start"'+(C.al==='start'?' selected':'')+'>시작 = 0초</option><option value="peak"'+(C.al==='peak'?' selected':'')+'>최고점 맞춤</option></select></div></div>'+
-    '<div class="row"><div class="field"><label for="cmpA">기록 1 (파랑)</label><select id="cmpA">'+opt(C.a)+'</select></div><div class="field"><label for="cmpB">기록 2 (주황)</label><select id="cmpB">'+opt(C.b)+'</select></div><div class="field"><label for="cmpC">기록 3 (초록, 선택)</label><select id="cmpC">'+opt(C.c,true)+'</select></div></div>';
+    '<div class="row cmprecs"><div class="field"><label for="cmpA">기록 1 (파랑)</label><select id="cmpA">'+opt(C.a)+'</select></div><div class="field"><label for="cmpB">기록 2 (주황)</label><select id="cmpB">'+opt(C.b)+'</select></div><div class="field"><label for="cmpC">기록 3 (초록, 선택)</label><select id="cmpC">'+opt(C.c,true)+'</select></div></div>';
   const recs=[C.a,C.b,C.c].filter(Boolean).map(id=>ok.find(r=>r.id===id)).filter(Boolean),data=recs.map(r=>recChart(r,C.k));
   /* 최고점 맞추기: 첫 곡선의 가장 큰 값(각도는 가장 작은 값) 시각을 기준으로 옮긴 뒤, 가장 이른 시작을 0초로 */
   const pkT=d=>{const x=d.s[0];let j=0;for(let i=0;i<x.v.length;i++)if(C.k==='ang'?x.v[i]<x.v[j]:x.v[i]>x.v[j])j=i;return x.t[j]};
