@@ -849,19 +849,30 @@ function fpsNote(){if(!V.has||!V.vfps)return '';const f=V.vfps,w=[];
   if(f<=35&&V.slow===1&&(V.sport==='start'||V.sport==='cmj'))w.push('30fps 영상입니다. 고fps로 찍어 슬로모션으로 저장한 파일이면 영상 속도의 배율을 맞추세요. 실제 30fps 촬영이면 시점 오차가 ±0.03초입니다.');
   return '<p class="small muted" style="margin-top:6px">이 영상: 재생 기준 약 <b class="num">'+f+'fps</b>'+(V.slow>1?' · 실제 시간으로 초당 '+Math.round(f*V.slow)+'프레임':'')+'</p>'+w.map(x=>'<p class="small" style="margin-top:2px">'+x+'</p>').join('')}
 /* 영상 바로 아래 고치기 막대: 고칠 목록이 있거나 고치기 중이면, 결과 아래까지 내려가지 않고 바로 반영 */
-function fixBarHTML(){if(!V.has||V.busy||!V.track)return '';const n=V.fixes.length,on=V.mode==='fix';if(!n&&!on)return '';
-  return '<div class="row fixbar" style="align-items:center;gap:8px;margin-top:8px"><span class="small">'+(n?'고칠 점 <b class="num">'+n+'</b>곳':'고치기 중: 점을 끌어 바로잡으세요')+'</span>'+
-    (n?'<button class="btn primary sm" type="button" id="fixApply2">고친 점 반영해 다시 추적</button>':'')+(on?'<button class="btn sm" type="button" id="fixBtn2">고치기 끝내기</button>':'')+'</div>'+
+function aiFixFrame(){const tr=V.track;if(!tr||V.busy)return;const c=trackAt(V.cur);if(!c){return}const i=c.i,F=tr.lm&&tr.lm[i];
+  if(!F){toast('이 분석에는 프레임별 자세 인식 결과가 없습니다(무늬만 추적했거나 예전 기록). 측정 추가·고치기 › AI로 위치 확인을 쓰세요.');return}
+  const keys=trkList().map(p=>p[0]).filter(k=>poseIdx(k)&&!(k==='main'&&dkFoot())),vis=j=>isFinite(F[3*j+2])?F[3*j+2]:0,side=[11,23,25,27].reduce((a,j)=>a+vis(j),0)>=[12,24,26,28].reduce((a,j)=>a+vis(j),0)?0:1;
+  const near=Math.max(6,.012*Math.max(V.cw,V.ch)),far=.15*Math.hypot(V.cw,V.ch),done=[],skip=[];if(V.mode!=='fix')V.mode='fix';remember('AI 위치로 이 프레임 고치기');
+  keys.forEach(k=>{const ids=poseIdx(k),j=ids[Math.min(ids.length-1,side)],x=F[3*j],y=F[3*j+1],q=trackAt(V.cur,k);if(!isFinite(x)||!q)return;const d=Math.hypot(x-q.x,y-q.y);
+    if(d<near)return;if(d>far||vis(j)<.02){skip.push(ptName(k));return}addFix(k,tr.t[i],x,y);done.push(ptName(k))});
+  render();toast(done.length?'AI 위치로 '+done.join(', ')+'을(를) 고칠 목록에 넣었습니다(분홍 ◆). 영상에서 맞는지 보고 반영을 누르세요.'+(skip.length?' '+skip.join(', ')+'은(는) AI 위치가 너무 멀어 뺐습니다.':''):'이 프레임은 추적 점이 AI 위치와 거의 같습니다'+(skip.length?'(AI 위치가 너무 먼 점: '+skip.join(', ')+')':'')+'.')}
+function fixBarHTML(){if(!V.has||V.busy||!V.track)return '';const n=V.fixes.length,on=V.mode==='fix';
+  return '<div class="row fixbar" style="align-items:center;gap:8px;margin-top:8px"><span class="small">'+(n?'고칠 점 <b class="num">'+n+'</b>곳':on?'고치기 중: 점을 끌어 바로잡으세요':'점이 어긋났으면')+'</span>'+
+    (n?'<button class="btn primary sm" type="button" id="fixApply2">고친 점 반영해 다시 추적</button>':'')+'<button class="btn sm" type="button" id="aiFixBtn">AI로 이 프레임 고치기</button>'+'<button class="btn sm" type="button" id="fixBtn2">'+(on?'고치기 끝내기':'직접 고치기')+'</button></div>'+
     '<p class="small muted" style="margin:4px 0 0">← → 1프레임 · Shift + ← → 10프레임</p>'}
 /* 찍은 점(분석 구간 첫 프레임)을 자세 인식 모델이 찾은 관절 중심으로 옮김. 사람마다 찍는 자리가 달라지는 것을 줄이고, 추적이 붙는 기준(모델 관절)과 찍은 점을 일치시킴 */
+/* 시각 t에서 자세 인식: 회전마다 t 직전 0.27초(9프레임)를 먼저 보여 줘 모델을 데운 뒤 t에서 찾음. ref·gate로 엉뚱한 사람·뒤집힘은 거름 */
+async function poseAtT(pl,t,ref){const gate=.25*Math.max(V.cw,V.ch);for(const rot of [0,1,3,2]){for(let k=9;k>=1;k--){const tt=t-k/30;if(tt<0)continue;await setCur(tt);grab();poseDetect(pl,1/30,rot)}
+    await setCur(t);grab();const C=poseWarm(pl,3,rot);if(C&&lmNear(C,ref,gate)&&!lmFlipped(C,ref,null))return C}return null}
 async function snapPts(){if(V.busy||V.aiBusy||!V.has)return;const pts=ptList().filter(p=>!isFixed(p[0])&&poseIdx(p[0])&&ptPos(p[0])&&!(p[0]==='main'&&dkFoot()));if(!pts.length){toast('맞출 수 있는 관절 점이 없습니다.');return}
   stopPlay();V.aiBusy=true;V.prog='(자세 인식 모델 준비 중)';uiState();let pl=null;try{pl=await poseLoader()}catch(e){}
   if(!pl){V.aiBusy=false;V.prog='';render();toast('자세 인식 모델을 불러오지 못했습니다. 공유 주소(GitHub Pages)에서 해 주세요.');return}
-  await setCur(V.t0);grab();const ref=pts.map(p=>{const q=ptPos(p[0]);return {ids:poseIdx(p[0]),x:q[0],y:q[1]}}),gate=.25*Math.max(V.cw,V.ch),lim=.08*Math.hypot(V.cw,V.ch);let L=null;
-  try{for(const rot of [0,1,3,2]){poseDetect(pl,.033,-1);poseDetect(pl,.033,-1);const C=poseWarm(pl,3,rot);if(C&&lmNear(C,ref,gate)&&!lmFlipped(C,ref,null)){L=C;break}}}catch(e){L=null}
-  V.aiBusy=false;V.prog='';if(!L){render();toast('이 프레임에서 몸을 찾지 못했습니다. 직접 찍은 위치를 그대로 씁니다.');return}
+  const ref=pts.map(p=>{const q=ptPos(p[0]);return {ids:poseIdx(p[0]),x:q[0],y:q[1]}}),lim=.12*Math.hypot(V.cw,V.ch);let L=null;
+  try{L=await poseAtT(pl,V.t0,ref)}catch(e){L=null}
+  V.aiBusy=false;V.prog='';if(!L){render();toast('분석 시작 프레임에서 몸을 찾지 못했습니다. 몸 전체가 더 잘 보이는 프레임으로 분석 구간 시작을 옮겨 다시 눌러 보세요. 지금은 직접 찍은 위치를 그대로 씁니다.');return}
   remember('찍은 점을 AI 관절 위치로');const moved=[],far=[];
-  pts.forEach(p=>{const k=p[0],q=ptPos(k);let b=null;poseIdx(k).forEach(i=>{const m=L[i];if(!m)return;const d=Math.hypot(m.x-q[0],m.y-q[1]);if(!b||d<b.d)b={d,x:m.x,y:m.y}});
+  const vs=s=>[11,23,25,27].reduce((a,i)=>a+(L[i+s]?L[i+s].v:0),0),side=vs(0)>=vs(1)?0:1;
+  pts.forEach(p=>{const k=p[0],q=ptPos(k),ids=poseIdx(k),m=L[ids[Math.min(ids.length-1,side)]];const b=m?{d:Math.hypot(m.x-q[0],m.y-q[1]),x:m.x,y:m.y}:null;
     if(!b||b.d>lim){far.push(p[1]);return}const np=[Math.round(b.x*10)/10,Math.round(b.y*10)/10];if(k==='main')V.target=np;else V.extra[k]=np;moved.push(p[1]+' '+Math.round(b.d)+'px')});
   V.track=null;V.res=null;V.rep=null;render();toast((moved.length?'맞춤: '+moved.join(', ')+'. ':'')+(far.length?far.join(', ')+'은(는) 찍은 자리와 너무 멀어 그대로 둠. ':'')+'영상에서 관절 위에 있는지 확인하세요.')}
 /* 분석 화질: 긴 변 720(보통) 또는 1280(높게, 기본). 추적 상자는 화질에 맞춰 같은 실제 크기가 되게 늘림 */
@@ -1764,7 +1775,8 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
   else if(t.id==='tgBtn'){stopPlay();if(V.mode==='target'){V.mode=null;render()}else{const nx=ptList().findIndex(q=>!ptPos(q[0]));V.tIdx=nx<0?0:nx;V.mode='target';await setCur(V.t0);render()}}
   else if(t.dataset.tpt){stopPlay();V.tIdx=+t.dataset.tpt;V.mode='target';await setCur(V.t0);render()}
   else if(t.id==='fixBtn'){stopPlay();if(!V.track){toast('먼저 분석을 시작하세요.');return}if(isFixed(V.fixK)||!trkList().some(p=>p[0]===V.fixK))V.fixK='main';V.mode=V.mode==='fix'?null:'fix';render()}
-  else if(t.id==='fixBtn2'){const b=$('#fixBtn');if(b)b.click();else{V.mode=null;render()}}
+  else if(t.id==='aiFixBtn'){stopPlay();aiFixFrame()}
+  else if(t.id==='fixBtn2'){if(V.mode==='fix'){V.mode=null;render()}else{const b=$('#fixBtn');if(b)b.click();else{V.mode='fix';render()}}}
   else if(t.id==='fixApply'||t.id==='fixApply2'){runFix().catch(x=>{V.busy=false;V.fixing=false;V.prog='';render();toast('반영하다 오류가 났습니다('+(x&&x.message||x)+'). 추적 결과와 고칠 목록은 그대로입니다.')})}
   else if(t.id==='fixClear'){remember('고칠 목록 비우기');V.fixes=[];render()}
   else if(t.dataset.fixgo!=null){const f=V.fixes[+t.dataset.fixgo];if(!f)return;stopPlay();V.fixK=f.k;await setCur(f.t);render()}
