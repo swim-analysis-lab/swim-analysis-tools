@@ -826,6 +826,11 @@ function fpsNote(){if(!V.has||!V.vfps)return '';const f=V.vfps,w=[];
   if(f>=100&&V.slow>1)w.push('fps가 높은 영상입니다. 240fps를 <b>실제 속도</b>로 저장한 영상이면 영상 속도를 "실제 속도"로 두세요(슬로모션 저장본은 보통 30fps).');
   if(f<=35&&V.slow===1&&(V.sport==='start'||V.sport==='cmj'))w.push('30fps 영상입니다. 고fps로 찍어 슬로모션으로 저장한 파일이면 영상 속도의 배율을 맞추세요. 실제 30fps 촬영이면 시점 오차가 ±0.03초입니다.');
   return '<p class="small muted" style="margin-top:6px">이 영상: 재생 기준 약 <b class="num">'+f+'fps</b>'+(V.slow>1?' · 실제 시간으로 초당 '+Math.round(f*V.slow)+'프레임':'')+'</p>'+w.map(x=>'<p class="small" style="margin-top:2px">'+x+'</p>').join('')}
+/* 영상 바로 아래 고치기 막대: 고칠 목록이 있거나 고치기 중이면, 결과 아래까지 내려가지 않고 바로 반영 */
+function fixBarHTML(){if(!V.has||V.busy||!V.track)return '';const n=V.fixes.length,on=V.mode==='fix';if(!n&&!on)return '';
+  return '<div class="row fixbar" style="align-items:center;gap:8px;margin-top:8px"><span class="small">'+(n?'고칠 점 <b class="num">'+n+'</b>곳':'고치기 중: 점을 끌어 바로잡으세요')+'</span>'+
+    (n?'<button class="btn primary sm" type="button" id="fixApply2">고친 점 반영해 다시 추적</button>':'')+(on?'<button class="btn sm" type="button" id="fixBtn2">고치기 끝내기</button>':'')+'</div>'+
+    '<p class="small muted" style="margin:4px 0 0">← → 1프레임 · Shift + ← → 10프레임</p>'}
 async function loadFile(file){stopPlay();V.vname=file.name||'';if(!S.editRec)V.saveNote=null;if(vid.src&&vid.src.indexOf('blob:')===0)URL.revokeObjectURL(vid.src);vid.src=URL.createObjectURL(file);vid.load();
   try{await once(vid,'loadedmetadata')}catch(e){toast('이 영상은 브라우저에서 열 수 없습니다. MP4(H.264)로 다시 시도해 주세요.');return}
   const vw=vid.videoWidth,vh=vid.videoHeight,sc=Math.min(1,720/Math.max(vw,vh));if(!vw||!isFinite(vid.duration)){toast('영상 정보를 읽지 못했습니다.');return}
@@ -1423,7 +1428,7 @@ async function slPoseAI(){if(V.busy||!V.has)return;stopPlay();V.busy=true;V.prog
 /* 결과 아래 버튼으로 영상 위에 찍는 모드를 켰을 때 영상이 보이게 올림(휴대폰은 결과가 영상 아래 멀리 있음) */
 function toStage(){const st=$('#stage');if(!st)return;const b=st.getBoundingClientRect();if(b.top<0||b.bottom>window.innerHeight)try{st.scrollIntoView({block:'center'})}catch(e){}}
 function guideText(){if(V.busy)return '추적 중입니다 '+V.prog;if(!V.has)return '예시 궤적입니다. 재생하거나 막대를 움직여 보세요. 내 영상을 선택하면 바뀝니다.';
-  return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:V.sport==='start'?'<b>수면</b>(물 표면이 닿는 높이, 레인로프가 떠 있는 선)을 누르세요. 머리가 이 선 아래로 내려간 순간을 입수로 봅니다.':'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',bo:'브레이크아웃 순간(머리가 수면 위로 처음 보이는 프레임)에서 <b>머리 위치</b>를 누르세요. 그 시각과 출발벽에서의 거리를 기록합니다.',slpose:'자세 점: <b>'+(SLK[V.slIdx]||SLK[0])[1]+'</b>를 누르세요 ('+((V.slIdx|0)+1)+'/'+SLK.length+'). '+SLH[(SLK[V.slIdx]||SLK[0])[0]]+'. 카메라 쪽 팔·다리를 찍고, 누른 채 움직이면 확대경이 나옵니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(phint(ptList()[V.tIdx][0])||'관절 중심을 찍습니다.'))+' 누른 채 움직이면 확대경이 나옵니다.',fix:'고칠 점: <b>'+esc(ptName(V.fixK))+'</b>(노란 고리). 올바른 자리를 누르거나, 다른 점을 끌면 그 점을 고칩니다. 고친 곳은 분홍 ◆로 남고, 다 고친 뒤 결과 아래 <b>반영</b>을 누르세요.'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
+  return {calA:'기준 길이의 <b>한쪽 끝</b>을 누르세요. 누른 채 움직이면 확대경으로 맞출 수 있습니다.',calB:'기준 길이의 <b>반대쪽 끝</b>을 누르세요.',bar:V.sport==='start'?'<b>수면</b>(물 표면이 닿는 높이, 레인로프가 떠 있는 선)을 누르세요. 머리가 이 선 아래로 내려간 순간을 입수로 봅니다.':'<b>바 윗면</b>을 누르세요. 턱이 이 선을 넘었는지로 반복을 판정합니다.',bo:'브레이크아웃 순간(머리가 수면 위로 처음 보이는 프레임)에서 <b>머리 위치</b>를 누르세요. 그 시각과 출발벽에서의 거리를 기록합니다.',slpose:'자세 점: <b>'+(SLK[V.slIdx]||SLK[0])[1]+'</b>를 누르세요 ('+((V.slIdx|0)+1)+'/'+SLK.length+'). '+SLH[(SLK[V.slIdx]||SLK[0])[0]]+'. 카메라 쪽 팔·다리를 찍고, 누른 채 움직이면 확대경이 나옵니다.',target:'<b>'+(ptList()[V.tIdx]||['',''])[1]+'</b> 위치를 누르세요 ('+(V.tIdx+1)+'/'+ptList().length+'). '+(V.tIdx===0?SPORT[V.sport].tgt:(phint(ptList()[V.tIdx][0])||'관절 중심을 찍습니다.'))+' 누른 채 움직이면 확대경이 나옵니다.',fix:'고칠 점: <b>'+esc(ptName(V.fixK))+'</b>(노란 고리). 올바른 자리를 누르거나, 다른 점을 끌면 그 점을 고칩니다. 고친 곳은 분홍 ◆로 남고, 다 고친 뒤 바로 아래 <b>고친 점 반영해 다시 추적</b>을 누르세요(← → 키로 프레임 이동).'}[V.mode]||(V.track?'막대를 움직이거나 재생해 궤적을 확인하세요.':'아래 순서대로 설정한 뒤 분석을 시작하세요.')}
 /* 기록 고치기: 분석 설정(점·구간·기준 길이·수면/바·직접 지정 시점)을 기록에 함께 저장해 두고, 같은 영상을 다시 고르면 불러옴 */
 const cpo=o=>o==null?o:JSON.parse(JSON.stringify(o));
 function setupOf(){return {poseModel:V.tmode==='pose'?POSE.modelId:undefined,pan:!!V.pan,bgsub:V.bgsub,tmode:V.tmode,sport:V.sport,preset:V.preset,rate:V.rate,slow:V.slow,half:V.half,t0:V.t0,t1:V.t1,cal:cpo(V.cal),bar:cpo(V.bar),target:cpo(V.target),extra:cpo(V.extra),man:cpo(V.man),cw:V.cw,ch:V.ch,vname:V.vname||'',fsize:V.fsize||0,fp:V.fp||null,vdur:Math.round(V.dur*1000)/1000}}
@@ -1470,7 +1475,7 @@ function viewAnalyze(){const calOk=!!pxPerM(),tgOk=allSet(),dis=V.has?'':' disab
    '<div class="row"><button class="btn sm" type="button" id="playBtn">재생</button><div style="flex:1;min-width:120px"><label for="scrub" class="small muted" style="display:none">시점</label><input id="scrub" type="range" min="0" max="'+V.dur+'" step="0.005" value="'+V.cur+'" aria-label="영상 시점"></div><span class="small num muted" id="tlabel"></span></div>'+
    '<div class="row"><button class="btn sm" type="button" data-nudge="-10"'+dis+'>◀◀ 10</button><button class="btn sm" type="button" data-nudge="-1"'+dis+'>◀ 1</button><button class="btn sm" type="button" data-nudge="1"'+dis+'>1 ▶</button><button class="btn sm" type="button" data-nudge="10"'+dis+'>10 ▶▶</button><span class="small muted">프레임 이동</span></div>'+
    (V.has?'<div class="row"><button class="btn sm" type="button" id="undoBtn"'+(UH.u.length?'':' disabled')+' title="Ctrl+Z">되돌리기</button><button class="btn sm" type="button" id="redoBtn"'+(UH.r.length?'':' disabled')+' title="Ctrl+Shift+Z">다시 실행</button><span class="small muted">'+(UH.u.length?'되돌릴 작업: '+esc(UH.u[UH.u.length-1].label):'점·구간을 바꾸면 되돌릴 수 있습니다')+'</span></div>':'')+
-   '<div class="banner" id="guideLine"></div></div>'+
+   '<div class="banner" id="guideLine"></div>'+fixBarHTML()+'</div>'+
   '<div class="side"><div class="card"><h2>설정</h2>'+
    '<div class="step done"><div class="n">1</div><div class="b"><div class="row"><div class="field" style="flex:2"><label for="fSport">종목</label><select id="fSport">'+Object.keys(SPORT).map(k=>'<option value="'+k+'"'+(V.sport===k?' selected':'')+'>'+SPORT[k].n+'</option>').join('')+'</select></div>'+(V.sport==='free'?'<div class="field" style="flex:2"><label for="fName">동작 이름</label><input id="fName" type="text" maxlength="30" placeholder="예: 스쿼트 스내치" value="'+esc(V.name)+'"></div>':'')+'</div>'+
     (SPORT[V.sport].swim?'':'<div class="row">'+(V.sport!=='free'?'<div class="field"><label for="fBody">체중(kg)</label><input id="fBody" type="number" inputmode="decimal" min="0" step="0.1" placeholder="파워 계산용" value="'+esc(V.body)+'"></div>':'')+'<div class="field"><label for="fMass">'+SPORT[V.sport].massL+'</label><input id="fMass" type="number" inputmode="decimal" min="0" step="0.1" placeholder="'+(V.sport==='free'?'파워 계산용':'0')+'" value="'+esc(V.mass)+'"></div></div>')+
@@ -1717,7 +1722,8 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
   else if(t.id==='tgBtn'){stopPlay();if(V.mode==='target'){V.mode=null;render()}else{const nx=ptList().findIndex(q=>!ptPos(q[0]));V.tIdx=nx<0?0:nx;V.mode='target';await setCur(V.t0);render()}}
   else if(t.dataset.tpt){stopPlay();V.tIdx=+t.dataset.tpt;V.mode='target';await setCur(V.t0);render()}
   else if(t.id==='fixBtn'){stopPlay();if(!V.track){toast('먼저 분석을 시작하세요.');return}if(isFixed(V.fixK)||!trkList().some(p=>p[0]===V.fixK))V.fixK='main';V.mode=V.mode==='fix'?null:'fix';render()}
-  else if(t.id==='fixApply'){runFix().catch(x=>{V.busy=false;V.fixing=false;V.prog='';render();toast('반영하다 오류가 났습니다('+(x&&x.message||x)+'). 추적 결과와 고칠 목록은 그대로입니다.')})}
+  else if(t.id==='fixBtn2'){const b=$('#fixBtn');if(b)b.click();else{V.mode=null;render()}}
+  else if(t.id==='fixApply'||t.id==='fixApply2'){runFix().catch(x=>{V.busy=false;V.fixing=false;V.prog='';render();toast('반영하다 오류가 났습니다('+(x&&x.message||x)+'). 추적 결과와 고칠 목록은 그대로입니다.')})}
   else if(t.id==='fixClear'){remember('고칠 목록 비우기');V.fixes=[];render()}
   else if(t.dataset.fixgo!=null){const f=V.fixes[+t.dataset.fixgo];if(!f)return;stopPlay();V.fixK=f.k;await setCur(f.t);render()}
   else if(t.dataset.fixdel!=null){const i=+t.dataset.fixdel;if(!V.fixes[i])return;remember('고칠 위치 빼기');V.fixes.splice(i,1);render()}
@@ -1867,6 +1873,10 @@ document.addEventListener('click',async e=>{const t=e.target.closest('#syncOpen,
   else if(t.id==='syncNow'){await Sync.run()}
   else if(t.id==='syncLeave'){Sync.leave();Sync.msg='이 기기에서 연결을 끊었습니다.';syncUI()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&Sync.open){Sync.open=false;syncUI()}});
+/* 방향키로 프레임 이동: ← → 1프레임, Shift + ← → 10프레임(분석 간격 기준). 입력 칸·선택 칸에서는 쓰지 않음 */
+document.addEventListener('keydown',e=>{if(S.view!=='analyze'||!V.has||V.busy||e.ctrlKey||e.metaKey||e.altKey)return;if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;
+  const tg=e.target;if(tg&&tg.matches&&tg.matches('input,select,textarea,[contenteditable]'))return;e.preventDefault();stopPlay();
+  const n=(e.key==='ArrowLeft'?-1:1)*(e.shiftKey?10:1);setCur(V.cur+n/Math.max(30,V.rate))});
 Sync.boot();
 </script>
 
