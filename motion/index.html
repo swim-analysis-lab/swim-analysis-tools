@@ -650,7 +650,7 @@ const winOf=()=>SPORT[V.sport].win||(V.sport==='cmj'?.03:.06);
 const ptList=()=>[['main',SPORT[V.sport].main]].concat(PRESET[V.preset].pts),ptPos=k=>k==='main'?V.target:(V.extra[k]||null),allSet=()=>ptList().every(p=>ptPos(p[0]));
 /* 고정점(출발대 발끝 띠): 찍기만 하고 따라가지 않는 점 */
 const isFixed=k=>(PRESET[V.preset].fixed||[]).includes(k),trkList=()=>ptList().filter(p=>!isFixed(p[0]));
-const S={recs:[],view:'analyze',sel:null,delAsk:null,rsp:null,edit:null,editRec:null};
+const S={recs:[],view:'analyze',sel:null,delAsk:null,rsp:null,edit:null,editRec:null,cmp:{}};
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch(e){return false}}};
 let toastT;function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(toastT);toastT=setTimeout(()=>t.style.display='none',3800)}
 
@@ -1084,6 +1084,17 @@ function bindStage(){const st=$('#stage');if(!st)return;let down=false;
 const CH={L:40,R:12,W:380,tmax:0};
 const CDEF={vx:['수평 속도','m/s'],vy:['수직 속도','m/s'],sp:['속력(방향 무관)','m/s'],Y:['높이','m'],P:['바벨에 전달된 파워','W'],ang:['관절 각도','°']};
 const COL=['var(--accent)','var(--down)','var(--up)'];
+/* 이 분석에서 그릴 수 있는 그래프 종류 (결과 화면의 그래프 선택과 같은 규칙) */
+function chartKeys(r,sp){return Object.keys(CDEF).filter(k=>(k!=='P'||r.P)&&(k!=='ang'||r.angles.length)&&(k!=='vx'||SPORT[sp].swim))}
+/* 저장용 그래프: 같은 간격으로 줄여(최대 약 240점) 숫자만 남김. 다시 계산할 수 없는 각도·파워·진행 방향까지 그대로 보존 */
+function chartPack(r,k){const R=V.rep,n=r.t.length;if(!n)return null;const dur=r.t[n-1],dt=Math.max(1/r.fs,dur/240),T=[];for(let t=0;t<=dur+1e-9;t+=dt)T.push(t);
+  const rd=k==='P'?(v=>Math.round(v)):k==='ang'?(v=>Math.round(v*10)/10):(v=>Math.round(v*1000)/1000),pick=a=>resample(r.t,a,1/dt).slice(0,T.length).map(rd);
+  const src=k==='ang'?r.angles.map(a=>({n:a.n,v:a.a})):[{n:CDEF[k][0],v:k==='vx'&&R&&R.dir?r.vx.map(v=>v*R.dir):r[k]}];
+  return {k,u:CDEF[k][1],dt:Math.round(dt*1e5)/1e5,s:src.map(x=>({n:x.n,v:pick(x.v)}))}}
+/* 기록에서 그래프 꺼내기: 저장한 그래프가 있으면 그것, 없으면 저장된 궤적으로 다시 계산(속도·높이만) */
+function recChart(rec,k){const c=(rec.charts||[]).find(x=>x.k===k);if(c)return {u:c.u,src:'saved',s:c.s.map(x=>({n:x.n,t:x.v.map((_,i)=>i*c.dt),v:x.v}))};
+  if(['vx','vy','sp','Y'].includes(k)&&(k!=='vx'||(SPORT[rec.sport]&&SPORT[rec.sport].swim))&&rec.X&&rec.Y&&rec.X.length>5){try{const K=fromRecord(rec);return {u:CDEF[k][1],src:'calc',s:[{n:CDEF[k][0],t:K.t,v:K[k]}]}}catch(e){}}
+  return null}
 function chartSVG(series,unit,cursor,marks){const W=380,H=220,L=CH.L,R=CH.R,T=14,B=30;let lo=0,hi=0,tmax=0;series.forEach(s=>{s.v.forEach(v=>{if(v<lo)lo=v;if(v>hi)hi=v});tmax=Math.max(tmax,s.t[s.t.length-1])});
   if(hi-lo<1e-6)hi=lo+1;const pad=(hi-lo)*.1;hi+=pad;if(lo<0)lo-=pad;if(cursor)CH.tmax=tmax;
   const X=t=>L+t/tmax*(W-L-R),Y=v=>T+(hi-v)*(H-T-B)/(hi-lo);let s='';
@@ -1237,6 +1248,8 @@ function resultsHTML(){const r=V.res;if(!r)return '';const s=r.sum,demo=!V.has,R
       (nf?'<div class="tscroll"><table class="mt"><tr><th>고칠 점</th><th class="v">영상 시점</th><th></th></tr>'+V.fixes.map((f,i)=>'<tr><td><b>'+esc(ptName(f.k))+'</b></td><td class="v">'+f2(f.t)+'초</td><td style="text-align:right;white-space:nowrap"><button class="btn sm" type="button" data-fixgo="'+i+'">보기</button> <button class="btn sm" type="button" data-fixdel="'+i+'">빼기</button></td></tr>').join('')+'</table></div>'+
         '<div class="row"><button class="btn primary" type="button" id="fixApply">고친 점 반영해 다시 추적 ('+nf+'곳)</button><button class="btn" type="button" id="fixClear">고칠 목록 비우기</button></div>':'')+
       (fl?'<p class="small muted">이 분석에 반영한 고침: '+fl+'곳.</p>':'');
+    {const ks=chartKeys(r,sp);if(!V.saveCh||!V.saveCh.every(k=>ks.includes(k)))V.saveCh=[ks.includes(V.chart)?V.chart:ks[0]].filter(Boolean);
+     h+='<div class="field"><span class="small muted" style="font-weight:500">기록에 함께 저장할 그래프 (여러 개 고를 수 있음)</span><div class="chips">'+ks.map(k=>'<button type="button" class="chip'+(V.saveCh.includes(k)?' done':'')+'" data-savech="'+k+'" aria-pressed="'+V.saveCh.includes(k)+'">'+CDEF[k][0]+'</button>').join('')+'</div></div>'}
     h+='<div class="row"><button class="btn primary" type="button" id="saveBtn"'+(nf?' disabled':'')+'>'+(S.editRec?'고친 내용 저장':'기록 저장')+'</button>'+(S.editRec?'<button class="btn" type="button" id="saveNewBtn"'+(nf?' disabled':'')+'>새 기록으로 저장</button>':'')+(nf?'<span class="small muted">고친 점을 반영한 뒤 저장할 수 있습니다.</span>':'')+'</div>'}
   return h+'</div>'}
 /* 현재 프레임에서 자세 인식으로 스트림라인 자세 점 찾기. 누운 몸은 머리·발을 뒤집어 찾기도 해서, 진행 방향과 맞을 때까지 화면을 90°씩 돌려 다시 찾음 */
@@ -1361,8 +1374,25 @@ function viewRecords(){const all=S.recs.slice().sort((a,b)=>a.created<b.created?
   const sp=S.rsp||V.sport,list=all.filter(r=>(r.sport||'free')===sp),cnt=k=>all.filter(r=>(r.sport||'free')===k).length;
   let h='<div class="card"><div class="row"><h2>기록</h2><div class="field" style="max-width:230px;margin-left:auto"><label for="fRecSport">종목</label><select id="fRecSport">'+Object.keys(SPORT).map(k=>'<option value="'+k+'"'+(sp===k?' selected':'')+'>'+SPORT[k].n+' ('+cnt(k)+')</option>').join('')+'</select></div></div>';
   if(!list.length)return h+'<p class="muted">이 종목으로 저장한 기록이 없습니다.</p></div>';
-  h+=editFormHTML(list);
+  h+=editFormHTML(list)+cmpHTML(list,sp);
   return h+(sp==='streamline'?slRecHTML(list):sp==='pullup'?pullRecHTML(list):sp==='cmj'?cmjRecHTML(list):sp==='start'?startRecHTML(list):sp==='dolphin'?dolphinRecHTML(list):freeRecHTML(list))+'</div>'}
+function cmpHTML(list,sp){const C=S.cmp[sp]||(S.cmp[sp]={k:null,a:null,b:null,c:'',al:'start'});
+  const keys=Object.keys(CDEF).filter(k=>list.some(r=>recChart(r,k)));if(!keys.length)return '';if(!keys.includes(C.k))C.k=keys.includes('vx')&&SPORT[sp].swim?'vx':keys.includes('vy')?'vy':keys[0];
+  const ok=list.filter(r=>recChart(r,C.k));if(!ok.find(r=>r.id===C.a))C.a=ok[1]?ok[1].id:ok[0].id;if(!ok.find(r=>r.id===C.b))C.b=ok[0].id;if(C.c&&!ok.find(r=>r.id===C.c))C.c='';
+  const lab=r=>esc(r.date)+(r.note?' · '+esc(r.note.slice(0,16)):'')+(r.mass?' · '+r.mass+'kg':''),opt=(sel,none)=>(none?'<option value="">없음</option>':'')+ok.map(r=>'<option value="'+r.id+'"'+(r.id===sel?' selected':'')+'>'+lab(r)+'</option>').join('');
+  let h='<h3>그래프 비교</h3><div class="row"><div class="field"><label for="cmpK">그래프</label><select id="cmpK">'+keys.map(k=>'<option value="'+k+'"'+(k===C.k?' selected':'')+'>'+CDEF[k][0]+'</option>').join('')+'</select></div>'+
+    '<div class="field"><label for="cmpAl">시간 맞추기</label><select id="cmpAl"><option value="start"'+(C.al==='start'?' selected':'')+'>시작 = 0초</option><option value="peak"'+(C.al==='peak'?' selected':'')+'>최고점 맞춤</option></select></div></div>'+
+    '<div class="row"><div class="field"><label for="cmpA">기록 1 (파랑)</label><select id="cmpA">'+opt(C.a)+'</select></div><div class="field"><label for="cmpB">기록 2 (주황)</label><select id="cmpB">'+opt(C.b)+'</select></div><div class="field"><label for="cmpC">기록 3 (초록, 선택)</label><select id="cmpC">'+opt(C.c,true)+'</select></div></div>';
+  const recs=[C.a,C.b,C.c].filter(Boolean).map(id=>ok.find(r=>r.id===id)).filter(Boolean),data=recs.map(r=>recChart(r,C.k));
+  /* 최고점 맞추기: 첫 곡선의 가장 큰 값(각도는 가장 작은 값) 시각을 기준으로 옮긴 뒤, 가장 이른 시작을 0초로 */
+  const pkT=d=>{const x=d.s[0];let j=0;for(let i=0;i<x.v.length;i++)if(C.k==='ang'?x.v[i]<x.v[j]:x.v[i]>x.v[j])j=i;return x.t[j]};
+  let off=data.map(d=>C.al==='peak'?-pkT(d):0);const m=Math.min.apply(null,off);off=off.map(o=>o-m);
+  const series=[];data.forEach((d,i)=>d.s.forEach((x,j)=>series.push({t:x.t.map(t=>t+off[i]),v:x.v,color:COL[i],dash:j?(j===1?'6 4':'2 4'):null})));
+  h+=chartSVG(series,data[0].u,false);
+  const multi=data.some(d=>d.s.length>1),ext=d=>{const v=d.s[0].v;return C.k==='ang'?Math.min.apply(null,v):Math.max.apply(null,v)},dp=v=>Math.abs(v)>=20?f0(v):f2(v);
+  h+='<div class="tscroll"><table class="mt"><tr><th>기록</th><th class="v">'+(C.k==='ang'?'최소 ('+esc(data[0].s[0].n)+')':'최고')+'</th>'+(recs.length>1?'<th class="v">기록 1과 차이</th>':'')+'</tr>'+recs.map((r,i)=>'<tr><td><svg width="26" height="8" style="vertical-align:middle"><line x1="0" x2="26" y1="4" y2="4" stroke="'+COL[i]+'" stroke-width="2.6"/></svg> '+lab(r)+(data[i].src==='calc'?' <span class="pill n">궤적으로 계산</span>':'')+'</td><td class="v">'+dp(ext(data[i]))+' '+esc(data[i].u)+'</td>'+(recs.length>1?'<td class="v">'+(i?(ext(data[i])-ext(data[0])>=0?'+':'')+dp(ext(data[i])-ext(data[0])):'–')+'</td>':'')+'</tr>').join('')+'</table></div>';
+  h+='<p class="small muted">색은 기록, '+(multi?'선 모양은 '+data[0].s.map((x,j)=>(j?(j===1?'긴 점선':'짧은 점선'):'실선')+' = '+esc(x.n)).join(', ')+'입니다. ':'')+'기록에 저장한 그래프가 없는 기록은 저장된 궤적으로 속도·높이를 다시 계산해 보여 줍니다(약간 다를 수 있음). 각도·파워는 저장할 때 그래프를 함께 고른 기록만 비교할 수 있습니다.</p>';
+  return h}
 function startRecHTML(list){const ok=list.filter(r=>r.st&&r.st.entD!=null).sort((a,b)=>a.created-b.created),g=v=>v==null?'–':f2(v),kn=list.some(r=>r.st&&r.st.kSet!=null);let h='<h3>입수 거리 추이</h3>';
   h+=ok.length?lineSVG(ok.map(r=>({label:r.date.slice(5).replace('-','.'),v:r.st.entD})),'m'):'<p class="muted">입수가 인식된 기록이 없습니다.</p>';
   return h+'<h3>기록 '+list.length+'건</h3><div class="tscroll"><table class="mt"><tr><th>날짜</th><th class="v">블록</th><th class="v">비행</th><th class="v">입수 거리</th><th class="v">이탈 속도</th><th class="v">이탈 각</th>'+(kn?'<th class="v">무릎 준비→이탈</th>':'')+'<th class="v">브레이크아웃</th><th></th></tr>'+
@@ -1540,10 +1570,12 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
   else if(t.id==='undoBtn'){undoV(false)}
   else if(t.id==='redoBtn'){undoV(true)}
   else if(t.id==='stopBtn'){V.abort=true}
+  else if(t.dataset.savech){const k=t.dataset.savech,a=V.saveCh||[];V.saveCh=a.includes(k)?a.filter(x=>x!==k):a.concat([k]);const on=V.saveCh.includes(k);t.classList.toggle('done',on);t.setAttribute('aria-pressed',on)}
   else if(t.id==='saveBtn'||t.id==='saveNewBtn'){const r=V.res;if(!r||!V.has)return;if(V.fixes.length){toast('고친 점을 먼저 반영해 주세요(반영하지 않은 고침 '+V.fixes.length+'곳).');return}
     const old=t.id==='saveBtn'&&S.editRec?S.recs.find(x=>x.id===S.editRec):null;const r3=a=>a.map(v=>Math.round(v*1000)/1000),s=Object.assign({},r.sum);
     const rec={id:'mv_'+Date.now().toString(36),date:today(),name:(V.sport==='free'?(V.name||'이름 없는 동작'):SPORT[V.sport].n).slice(0,30),sport:V.sport,body:parseFloat(V.body)||0,mass:parseFloat(V.mass)||0,fs:r.fs,slow:V.slow,win:winOf(),X:r3(resample(r.t,r.X,Math.min(r.fs,60))),Y:r3(resample(r.t,r.Y,Math.min(r.fs,60))),sum:s,ang:r.angles.map(a=>({n:a.n,min:Math.round(a.min),max:Math.round(a.max)})),created:Date.now(),v:4};rec.fs=Math.min(r.fs,60);rec.setup=setupOf();if(old){rec.id=old.id;rec.created=old.created;rec.date=old.date;if(old.note)rec.note=old.note}
     Object.assign(rec,recMetrics());
+    {const ks=chartKeys(r,V.sport);rec.charts=(V.saveCh||[]).filter(k=>ks.includes(k)).map(k=>chartPack(r,k)).filter(Boolean);if(!rec.charts.length)delete rec.charts}
     /* 추적 결과(점 경로) 자체를 저장 → 다시 열 때 다시 추적하지 않고 그대로 불러옴. 데이터베이스 문서 한도(256KB) 안으로: 크면 띠 화면을 빼고, 그래도 크면 설정만 */
     let big=false;if(V.track&&V.track.t.length){rec.trk=packTrack(V.track);if(JSON.stringify(rec).length>240000)rec.trk=packTrack(V.track,{fbpMax:0});if(JSON.stringify(rec).length>240000){delete rec.trk;big=true}}
     t.disabled=true;const res=await Store.save(rec);if(res==='fail'){toast('저장하지 못했습니다. 브라우저 저장 공간이 가득 찼습니다.');t.disabled=false;return}toast((old?'기록을 고쳤습니다. ':'')+(res==='cloud'?'계정에 저장했습니다.':'이 브라우저에 저장했습니다.')+(big?' 추적 결과가 너무 길어 설정만 저장했습니다(다시 열면 다시 추적).':''));S.sel=null;S.editRec=null;S.rsp=rec.sport;location.hash='#records'}
@@ -1584,6 +1616,7 @@ document.addEventListener('change',async e=>{const t=e.target;
   else if(t.id==='fCm'){const v=parseFloat(t.value);if(v>0){V.cal.cm=v;if(V.has)softUpdate();else paint()}}
   else if(t.id==='fMass'){V.mass=t.value;softUpdate()}
   else if(t.id==='chartSel'){V.chart=t.value;render()}
+  else if(/^cmp(K|Al|A|B|C)$/.test(t.id)){const sp=S.rsp||V.sport,C=S.cmp[sp]||(S.cmp[sp]={});C[{cmpK:'k',cmpAl:'al',cmpA:'a',cmpB:'b',cmpC:'c'}[t.id]]=t.value;render()}
   else if(t.dataset.sel){const id=t.dataset.sel;if(t.checked){if(S.sel.length>=3){t.checked=false;toast('3개까지 비교할 수 있습니다.');return}S.sel.push(id)}else S.sel=S.sel.filter(x=>x!==id);render()}
 });
 document.addEventListener('input',e=>{const t=e.target;if(t.id==='scrub'){if(V.busy)return;stopPlay();setCur(+t.value)}else if(t.id==='fName')V.name=t.value});
