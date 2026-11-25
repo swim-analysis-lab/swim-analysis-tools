@@ -861,8 +861,8 @@ function aiFixFrame(){const tr=V.track;if(!tr||V.busy)return;const c=trackAt(V.c
   render();toast(done.length?'AI 위치로 '+done.join(', ')+'을(를) 고칠 목록에 넣었습니다(분홍 ◆). 영상에서 맞는지 보고 반영을 누르세요.'+(skip.length?' '+skip.join(', ')+'은(는) AI 위치가 너무 멀어 뺐습니다.':''):'이 프레임은 추적 점이 AI 위치와 거의 같습니다'+(skip.length?'(AI 위치가 너무 먼 점: '+skip.join(', ')+')':'')+'.')}
 function fixBarHTML(){if(!V.has||V.busy||!V.track)return '';const n=V.fixes.length,on=V.mode==='fix';
   return '<div class="row fixbar" style="align-items:center;gap:8px;margin-top:8px"><span class="small">'+(n?'고칠 점 <b class="num">'+n+'</b>곳':on?'고치기 중: 점을 끌어 바로잡으세요':'점이 어긋났으면')+'</span>'+
-    (n?'<button class="btn primary sm" type="button" id="fixApply2">고친 점 반영해 다시 추적</button>':'')+'<button class="btn sm" type="button" id="aiFixBtn">AI로 이 프레임 고치기</button>'+'<button class="btn sm" type="button" id="fixBtn2">'+(on?'고치기 끝내기':'직접 고치기')+'</button></div>'+
-    '<p class="small muted" style="margin:4px 0 0">← → 1프레임 · Shift + ← → 10프레임</p>'}
+    (n?'<button class="btn primary sm" type="button" id="fixApply2">고친 점 반영해 다시 추적</button>':'')+'<button class="btn sm" type="button" id="aiFixBtn">AI로 이 프레임 고치기</button>'+(on?'</div><div class="row" style="align-items:center;gap:6px;margin-top:6px"><span class="small muted">고칠 점</span><div class="chips">'+trkList().filter(p=>!isFixed(p[0])).map((p,i)=>'<button type="button" class="chip'+(V.fixK===p[0]?' done':'')+'" data-fixk="'+p[0]+'" aria-pressed="'+(V.fixK===p[0])+'">'+(i+1)+' '+esc(p[1])+'</button>').join('')+'</div>':'')+'<button class="btn sm" type="button" id="fixBtn2">'+(on?'고치기 끝내기':'직접 고치기')+'</button></div>'+
+    '<p class="small muted" style="margin:4px 0 0">← → 1프레임 · Shift + ← → 10프레임'+(on?' · 숫자 키 1~9로 고칠 점 바꾸기':'')+'</p>'}
 /* 찍은 점(분석 구간 첫 프레임)을 자세 인식 모델이 찾은 관절 중심으로 옮김. 사람마다 찍는 자리가 달라지는 것을 줄이고, 추적이 붙는 기준(모델 관절)과 찍은 점을 일치시킴 */
 /* 시각 t에서 자세 인식: 회전마다 t 직전 0.27초(9프레임)를 먼저 보여 줘 모델을 데운 뒤 t에서 찾음. ref·gate로 엉뚱한 사람·뒤집힘은 거름 */
 async function poseAtT(pl,t,ref){const gate=.25*Math.max(V.cw,V.ch);for(const rot of [0,1,3,2]){for(let k=9;k>=1;k--){const tt=t-k/30;if(tt<0)continue;await setCur(tt);grab();poseDetect(pl,1/30,rot)}
@@ -1778,6 +1778,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,[da
   else if(t.id==='tgBtn'){stopPlay();if(V.mode==='target'){V.mode=null;render()}else{const nx=ptList().findIndex(q=>!ptPos(q[0]));V.tIdx=nx<0?0:nx;V.mode='target';await setCur(V.t0);render()}}
   else if(t.dataset.tpt){stopPlay();V.tIdx=+t.dataset.tpt;V.mode='target';await setCur(V.t0);render()}
   else if(t.id==='fixBtn'){stopPlay();if(!V.track){toast('먼저 분석을 시작하세요.');return}if(isFixed(V.fixK)||!trkList().some(p=>p[0]===V.fixK))V.fixK='main';V.mode=V.mode==='fix'?null:'fix';render()}
+  else if(t.dataset.fixk){V.fixK=t.dataset.fixk;const sel=$('#fixSel');if(sel)sel.value=V.fixK;render()}
   else if(t.id==='aiFixBtn'){stopPlay();aiFixFrame()}
   else if(t.id==='fixBtn2'){if(V.mode==='fix'){V.mode=null;render()}else{const b=$('#fixBtn');if(b)b.click();else{V.mode='fix';render()}}}
   else if(t.id==='fixApply'||t.id==='fixApply2'){runFix().catch(x=>{V.busy=false;V.fixing=false;V.prog='';render();toast('반영하다 오류가 났습니다('+(x&&x.message||x)+'). 추적 결과와 고칠 목록은 그대로입니다.')})}
@@ -1933,6 +1934,9 @@ document.addEventListener('click',async e=>{const t=e.target.closest('#syncOpen,
   else if(t.id==='syncNow'){await Sync.run()}
   else if(t.id==='syncLeave'){Sync.leave();Sync.msg='이 기기에서 연결을 끊었습니다.';syncUI()}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&Sync.open){Sync.open=false;syncUI()}});
+/* 고치기 중 숫자 키 1~9: 고칠 점 바꾸기 */
+document.addEventListener('keydown',e=>{if(S.view!=='analyze'||!V.has||V.busy||V.mode!=='fix'||e.ctrlKey||e.metaKey||e.altKey||!/^[1-9]$/.test(e.key))return;const tg=e.target;if(tg&&tg.matches&&tg.matches('input,select,textarea,[contenteditable]'))return;
+  const L=trkList().filter(p=>!isFixed(p[0])),p=L[+e.key-1];if(!p)return;e.preventDefault();V.fixK=p[0];const sel=$('#fixSel');if(sel)sel.value=V.fixK;render()});
 /* 방향키로 프레임 이동: ← → 1프레임, Shift + ← → 10프레임(분석 간격 기준). 입력 칸·선택 칸에서는 쓰지 않음 */
 document.addEventListener('keydown',e=>{if(S.view!=='analyze'||!V.has||V.busy||e.ctrlKey||e.metaKey||e.altKey)return;if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;
   const tg=e.target;if(tg&&tg.matches&&tg.matches('input,select,textarea,[contenteditable]'))return;e.preventDefault();stopPlay();
